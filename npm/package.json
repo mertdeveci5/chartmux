@@ -1,0 +1,44 @@
+{
+  "name": "chartmux",
+  "version": "0.1.0",
+  "description": "Charts for terminal UI, PNG, SVG, HTML, and JSON",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "chartmux": "bin/chartmux.js"
+  },
+  "files": [
+    "bin",
+    "vendor",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepack": "node scripts/build-binaries.js",
+    "test": "node --check bin/chartmux.js && node --check scripts/build-binaries.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "arm64",
+    "x64"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mertdeveci5/chartmux.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mertdeveci5/chartmux/issues"
+  },
+  "homepage": "https://github.com/mertdeveci5/chartmux#readme",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

@@ -1,0 +1,18 @@
+# Chartmux
+
+> Chartmux turns CSV, JSON, and versioned chart specifications into terminal charts, PNG, SVG, and self-contained HTML.
+
+## Primary pages
+
+- [Product overview and playground](/): Interactive chart playground, chart contract, and supported chart catalog.
+
+## Commands
+
+- `chartmux demo --list`: List built-in chart demonstrations.
+- `chartmux demo grouped-bar`: Display a grouped bar chart.
+- `chartmux demo line --watch`: Open the responsive terminal UI.
+- `chartmux sales.csv --type line --x month --series revenue,cost`: Build a chart from a dataset.
+
+## Source
+
+- [Chartmux on GitHub](https://github.com/mertdeveci5/chartmux)

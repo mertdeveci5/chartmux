@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chartmux blind usability report</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d0e11;
+      --panel: #15161a;
+      --panel-2: #1b1c21;
+      --line: #32343b;
+      --text: #f1f1f3;
+      --muted: #a4a7b0;
+      --purple: #8c7cf7;
+      --cyan: #45c8d8;
+      --green: #56d894;
+      --yellow: #f4c66a;
+      --red: #f27f87;
+      --orange: #ee9c66;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 50% -12rem, rgba(140, 124, 247, 0.18), transparent 34rem),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    a { color: var(--cyan); }
+    code, pre, kbd, .eyebrow, .tag, th, .metric-label {
+      font-family: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+    }
+
+    .page {
+      width: min(1180px, calc(100% - 32px));
+      margin: 16px auto;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(13, 14, 17, 0.94);
+      box-shadow: 0 32px 100px rgba(0, 0, 0, 0.4);
+    }
+
+    header {
+      padding: 64px clamp(24px, 6vw, 72px) 48px;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(rgba(255,255,255,.016) 1px, transparent 1px),
+        linear-gradient(135deg, rgba(140,124,247,.08), transparent 50%);
+      background-size: 100% 24px, auto;
+    }
+
+    .eyebrow {
+      color: var(--purple);
+      font-size: 12px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      max-width: 820px;
+      margin: 16px 0 18px;
+      font-size: clamp(38px, 7vw, 72px);
+      font-weight: 500;
+      letter-spacing: -.055em;
+      line-height: 1;
+    }
+
+    .lede {
+      max-width: 760px;
+      margin-bottom: 30px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-top: 1px solid var(--line);
+      border-left: 1px solid var(--line);
+    }
+
+    .metric {
+      min-height: 88px;
+      padding: 16px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: rgba(21, 22, 26, .72);
+    }
+
+    .metric strong {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 24px;
+      font-weight: 500;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+
+    nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 14px clamp(20px, 5vw, 56px);
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    nav a {
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: var(--muted);
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: 10px;
+      text-decoration: none;
+    }
+
+    main { padding: 0 clamp(20px, 5vw, 56px) 64px; }
+    section { padding-top: 52px; }
+    section + section { margin-top: 52px; border-top: 1px solid var(--line); }
+    h2 {
+      margin-bottom: 12px;
+      font-size: clamp(26px, 4vw, 38px);
+      font-weight: 500;
+      letter-spacing: -.035em;
+    }
+
+    h3 {
+      margin-bottom: 8px;
+      font-size: 17px;
+      font-weight: 500;
+    }
+
+    .section-intro {
+      max-width: 800px;
+      margin-bottom: 26px;
+      color: var(--muted);
+    }
+
+    .callout {
+      padding: 20px;
+      border: 1px solid color-mix(in srgb, var(--purple) 45%, var(--line));
+      border-left: 3px solid var(--purple);
+      background: rgba(140, 124, 247, .07);
+    }
+
+    .callout p:last-child { margin-bottom: 0; }
+    .finding-list { display: grid; gap: 12px; }
+
+    .finding {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--panel);
+    }
+
+    .finding-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 10px;
+    }
+
+    .finding p { color: var(--muted); }
+    .finding p:last-child { margin-bottom: 0; }
+    .tag {
+      display: inline-flex;
+      flex: 0 0 auto;
+      padding: 4px 7px;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      font-size: 9px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .high { color: var(--red); }
+    .medium { color: var(--yellow); }
+    .low { color: var(--cyan); }
+    .positive { color: var(--green); }
+
+    pre {
+      margin: 14px 0 0;
+      padding: 14px 16px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #0b0c0f;
+      color: #d8d9de;
+      font-size: 11px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+    }
+
+    code {
+      padding: .1em .3em;
+      border-radius: 4px;
+      background: var(--panel-2);
+      color: #ddd7ff;
+      font-size: .9em;
+    }
+
+    pre code { padding: 0; background: transparent; color: inherit; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 400;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    td { color: #d7d8dd; }
+    ul { padding-left: 20px; }
+    li + li { margin-top: 7px; }
+
+    .two-column {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--panel);
+    }
+
+    details + details { margin-top: 10px; }
+    summary {
+      padding: 15px 18px;
+      color: var(--text);
+      cursor: pointer;
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: 11px;
+    }
+
+    .details-body { padding: 0 18px 18px; color: var(--muted); }
+    .details-body p:last-child { margin-bottom: 0; }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 20px clamp(20px, 5vw, 56px);
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      font-family: "SFMono-Regular", "Cascadia Code", monospace;
+      font-size: 9px;
+    }
+
+    @media (max-width: 760px) {
+      .page { width: 100%; margin: 0; border-right: 0; border-left: 0; border-radius: 0; }
+      .metrics, .two-column { grid-template-columns: 1fr 1fr; }
+      .finding-header { flex-direction: column; }
+      table { display: block; overflow-x: auto; }
+    }
+
+    @media (max-width: 480px) {
+      .metrics, .two-column { grid-template-columns: 1fr; }
+      footer { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <article class="page">
+    <header>
+      <div class="eyebrow">Chartmux · blind CLI study · 10 August 2026</div>
+      <h1>Usability test report</h1>
+      <p class="lede">Three independent agents learned Chartmux only from its public README and <code>--help</code>, then used a prebuilt binary as a data analyst, an automation engineer, and a terminal enthusiast. They were explicitly prohibited from inspecting the implementation.</p>
+      <div class="metrics" aria-label="Study summary">
+        <div class="metric"><strong>3</strong><span class="metric-label">blind user sessions</span></div>
+        <div class="metric"><strong>15</strong><span class="metric-label">named demos exercised</span></div>
+        <div class="metric"><strong>10</strong><span class="metric-label">defects found and repaired</span></div>
+        <div class="metric"><strong>4</strong><span class="metric-label">export modes covered</span></div>
+      </div>
+    </header>
+
+    <nav aria-label="Report sections">
+      <a href="#summary">Summary</a>
+      <a href="#remediation">Remediation</a>
+      <a href="#method">Method</a>
+      <a href="#bugs">Bugs</a>
+      <a href="#mistakes">Mistakes</a>
+      <a href="#ambiguities">Ambiguities</a>
+      <a href="#desires">Desires</a>
+      <a href="#successes">Successes</a>
+      <a href="#sessions">Sessions</a>
+    </nav>
+
+    <main>
+      <section id="summary">
+        <h2>Executive summary</h2>
+        <p class="section-intro">The core contract is promising: direct CSV input, inference, stdin, strict saved specifications, deterministic image output, and clear data validation all worked. The largest problems are concentrated in terminal rendering and CLI discoverability rather than the export engines.</p>
+        <div class="callout">
+          <h3>Recommended order of work</h3>
+          <p>First repair horizontal and combo terminal rendering. Next make terminal output honest and automatable: respect TTY/NO_COLOR, reject or implement flags consistently, and return a failure status when nothing was rendered. Then simplify command-specific help and expose enum values, defaults, inference, and the direct-file form.</p>
+        </div>
+      </section>
+
+      <section id="remediation">
+        <h2>Remediation status</h2>
+        <p class="section-intro">All ten reproducible defects were repaired after this source-blind study. The original findings and transcripts remain below as historical evidence of what the evaluators encountered.</p>
+        <table>
+          <thead><tr><th>Finding</th><th>Status</th><th>Resolution</th></tr></thead>
+          <tbody>
+            <tr><td>B01 · Horizontal bars</td><td class="positive">Fixed</td><td>Grouped horizontal bars now reserve a row per bar and calculate label width after data is loaded.</td></tr>
+            <tr><td>B02 · Combo marks</td><td class="positive">Fixed</td><td>Unicode combo output draws solid bars and connected lines on the same axes.</td></tr>
+            <tr><td>B03 · Display flags</td><td class="positive">Fixed</td><td><code>--hide-axes</code> changes terminal output. Unsupported graphical value labels now fail with an export recommendation.</td></tr>
+            <tr><td>B04 · ANSI output</td><td class="positive">Fixed</td><td>Redirected output is plain text, <code>NO_COLOR</code> is honored, and <code>--no-color</code> is available.</td></tr>
+            <tr><td>B05 · Kitty corruption</td><td class="positive">Fixed</td><td>Forced capability was removed. Image mode activates only after a successful terminal capability probe.</td></tr>
+            <tr><td>B06 · Small terminals</td><td class="positive">Fixed</td><td>One-shot rendering returns exit 1 with a complete size error; watch-mode errors wrap to the available width.</td></tr>
+            <tr><td>B07 · Incompatible flags</td><td class="positive">Fixed</td><td>Each typed chart command exposes only its relevant chart options and rejects contradictory flags during parsing.</td></tr>
+            <tr><td>B08 · Terminal paths</td><td class="positive">Fixed</td><td><code>--export terminal --output FILE</code> writes plain UTF-8 terminal output to the requested file.</td></tr>
+            <tr><td>B09 · Histogram bins</td><td class="positive">Fixed</td><td><code>0</code> is explicitly documented as automatic; negative values and values above 100 fail validation.</td></tr>
+            <tr><td>B10 · Unavailable toggle</td><td class="positive">Fixed</td><td>The <kbd>g</kbd> action is shown only after Kitty graphics support is confirmed.</td></tr>
+          </tbody>
+        </table>
+        <div class="callout" style="margin-top:16px">
+          <h3>Automation requests shipped too</h3>
+          <p><code>validate</code>, <code>schema</code>, <code>--version</code>, resolved <code>--export json</code>, <code>--output -</code> streaming for every artifact format, and explicit plain terminal output are now part of the public CLI.</p>
+        </div>
+      </section>
+
+      <section id="method">
+        <h2>Method</h2>
+        <p class="section-intro">Each evaluator received the same binary at <code>/tmp/chartmux-usability/chartmux</code>, a separate temporary directory, and a different goal. No evaluator listed, searched, or opened implementation files.</p>
+        <table>
+          <thead><tr><th>Role</th><th>Goal</th><th>Coverage</th></tr></thead>
+          <tbody>
+            <tr><td>First-time data analyst</td><td>Turn a self-authored CSV into common charts.</td><td>Direct files, inference, grouped/stacked/horizontal bars, stdin, PNG, errors, small sizes.</td></tr>
+            <tr><td>Automation engineer</td><td>Build deterministic saved-spec and export workflows.</td><td>JSON, CSV stdin, PNG/SVG/HTML, strict validation, determinism, clipboard, redirected output.</td></tr>
+            <tr><td>Terminal enthusiast</td><td>Evaluate demos, TUI behavior, resizing, modes, and recovery.</td><td>All demos, PTY watch mode, live resizing, Kitty/Unicode, display flags, invalid combinations.</td></tr>
+          </tbody>
+        </table>
+        <p style="margin-top:16px;color:var(--muted)">Classification rule: a failed natural guess is a <em>mistake</em>; unclear or contradictory guidance is an <em>ambiguity</em>; missing expected capability is a <em>desire</em>; behavior contradicting the documented contract or silently producing the wrong result is a <em>bug</em>.</p>
+      </section>
+
+      <section id="bugs">
+        <h2>Bugs</h2>
+        <p class="section-intro">These findings were reproduced by the blind evaluators through the public CLI. Severity reflects user impact, not implementation effort.</p>
+        <div class="finding-list">
+          <article class="finding">
+            <div class="finding-header"><div><h3>B01 · Horizontal bars are blank in terminal output</h3><span class="eyebrow">Terminal renderer</span></div><span class="tag high">High</span></div>
+            <p>User CSV, the built-in <code>horizontal-bar</code> demo, explicit dimensions, default dimensions, non-TTY capture, and an allocated PTY all showed only empty axis rows and a legend. PNG output of the same chart was correct.</p>
+            <pre><code>$ chartmux demo horizontal-bar --width 72 --height 12
+Horizontal Grouped Bar Chart
+Visitors by month
+
+│
+│
+… empty rows …
+━━ Desktop   ━━ Mobile
+
+January – June 2024
+[exit 0]</code></pre>
+          </article>
+
+          <article class="finding">
+            <div class="finding-header"><div><h3>B02 · Combo charts lose their bar mark in terminal output</h3><span class="eyebrow">Terminal renderer</span></div><span class="tag high">High</span></div>
+            <p>A combo configured with <code>--marks bar,line</code> displayed the line but no bar/block glyphs. A control bar chart from the same data did contain bar glyphs.</p>
+          </article>
+
+          <article class="finding">
+            <div class="finding-header"><div><h3>B03 · Documented display flags are silently ignored by terminal output</h3><span class="eyebrow">Contract correctness</span></div><span class="tag high">High</span></div>
+            <p><code>--show-values</code> and <code>--hide-axes</code> produced byte-for-byte identical output to the baseline. <code>--hide-legend</code> did work. Successful exit codes make the ignored options particularly difficult to detect in automation.</p>
+          </article>
+
+          <article class="finding">
+            <div class="finding-header"><div><h3>B04 · Redirected terminal output still contains ANSI and ignores NO_COLOR</h3><span class="eyebrow">Automation</span></div><span class="tag high">High</span></div>
+            <p>All three evaluators observed ANSI escape sequences outside a TTY. <code>NO_COLOR=1</code> made no difference, and no <code>--no-color</code> option exists. Redirected output is therefore noisy and difficult to diff.</p>
+            <pre><code>$ chartmux demo line --width 40 --height 8 &gt; chart.txt
+$ file chart.txt
+chart.txt: Unicode text, UTF-8 text, with escape sequences
+
+$ NO_COLOR=1 chartmux demo line --width 40 --height 8 &gt; no-color.txt
+$ file no-color.txt
+no-color.txt: Unicode text, UTF-8 text, with escape sequences</code></pre>
+          </article>
+
+          <article class="finding">
+            <div class="finding-header"><div><h3>B05 · Forced Kitty mode can corrupt an unsupported terminal</h3><span class="eyebrow">Terminal protocol</span></div><span class="tag high">High</span></div>
+            <p>Inside a nested PTY without usable Kitty graphics, forced mode emitted a large base64 protocol payload followed by private-use and combining-character garbage. Pressing <code>q</code> restored the terminal, but the session was unusable until then.</p>
+          </article>
+
+          <article class="finding">
+            <div class="finding-header"><div><h3>B06 · Too-small terminal output reports success and truncates recovery text</h3><span class="eyebrow">Error signaling</span></div><span class="tag medium">Medium</span></div>
+            <p>One-shot rendering at <code>40×4</code> or <code>30×4</code> rendered no chart, printed a truncated warning, and exited <code>0</code>. At <code>24×8</code> watch mode truncated even the required-size diagnostic. Automation cannot distinguish this from a completed render.</p>
+          </article>
+
+          <article class="finding">
+            <div class="finding-header"><div><h3>B07 · Typed commands advertise incompatible flags and silently ignore some</h3><span class="eyebrow">CLI contract</span></div><span class="tag medium">Medium</span></div>
+            <p><code>line --help</code> advertises <code>--type</code>, <code>--marks</code>, <code>--layout</code>, <code>--orientation</code>, and <code>--bins</code>. Running <code>line ... --type bar</code> exits successfully but still emits a line chart. The same issue appears in the opposite direction for <code>bar ... --type line</code>.</p>
+            <pre><code>$ chartmux line sales.csv --type bar --x month --series revenue,cost \
+    --export html --output result.html
+[exit 0]
+$ grep -o 'data-chart-type="[^"]*"' result.html
+data-chart-type="line"</code></pre>
+          </article>
+
+          <article class="finding">
+            <div class="finding-header"><div><h3>B08 · Terminal output paths are accepted but ignored</h3><span class="eyebrow">Output contract</span></div><span class="tag medium">Medium</span></div>
+            <p><code>--export terminal --output terminal.txt</code> exits successfully, ignores the requested path, and writes ANSI to stdout. Either the combination should write the file or fail validation.</p>
+          </article>
+
+          <article class="finding">
+            <div class="finding-header"><div><h3>B09 · Invalid histogram bin counts silently become automatic values</h3><span class="eyebrow">Validation</span></div><span class="tag medium">Medium</span></div>
+            <p>Both <code>--bins 0</code> and <code>--bins=-1</code> exited successfully and behaved like the default bin count, despite the saved-spec contract describing a positive bounded value.</p>
+          </article>
+
+          <article class="finding">
+            <div class="finding-header"><div><h3>B10 · Watch mode advertises a presentation switch that can silently do nothing</h3><span class="eyebrow">Interactive feedback</span></div><span class="tag medium">Medium</span></div>
+            <p>Auto watch mode displayed <code>g switch presentation</code> in a non-Kitty PTY. Pressing <code>g</code> caused no redraw, message, or state change. The UI should not advertise an unavailable action, or it should explain why switching failed.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="mistakes">
+        <h2>Mistakes users made</h2>
+        <p class="section-intro">These are not automatically defects. They show where common CLI and charting conventions diverge from Chartmux.</p>
+        <table>
+          <thead><tr><th>Natural attempt</th><th>Observed result</th><th>Recovery quality</th></tr></thead>
+          <tbody>
+            <tr><td><code>bar ... --stacked</code></td><td>Unknown flag, exit 80.</td><td>Full help was printed, but it did not suggest <code>--layout stacked</code>.</td></tr>
+            <tr><td><code>bar ... --sort revenue:desc</code></td><td>Unknown flag.</td><td>Clear failure, but no suggestion to sort upstream.</td></tr>
+            <tr><td><code>chartmux demos</code></td><td>Treated as a filename; duplicated <code>open demos</code> error.</td><td>Poor: neither <code>demo</code> nor <code>demo --list</code> was suggested.</td></tr>
+            <tr><td><code>chartmux demo lin</code></td><td><code>unknown demo "lin"</code>.</td><td>No fuzzy suggestion or list hint.</td></tr>
+            <tr><td><code>--terminal-mode ansi</code></td><td>Rejected.</td><td>Good: error revealed <code>auto</code>, <code>unicode</code>, and <code>kitty</code>.</td></tr>
+            <tr><td><code>--format terminal</code></td><td>Unknown flag.</td><td>Required discovering that output selection is called <code>--export</code>.</td></tr>
+            <tr><td><code>--export jpg</code></td><td>Rejected.</td><td>Good: error listed every supported format.</td></tr>
+            <tr><td><code>--output -</code></td><td>Created a literal file named <code>-</code>.</td><td>Surprising for a pipeline-oriented CLI.</td></tr>
+            <tr><td><code>--image-width 320 --image-height 180</code></td><td>Rejected because height must be at least 240.</td><td>The error was clear, but limits were absent from help.</td></tr>
+            <tr><td><code>--copy</code> without PNG</td><td>Rejected.</td><td>Excellent: explicitly said <code>--copy requires --export png</code>.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="ambiguities">
+        <h2>Ambiguous wording and functionality</h2>
+        <div class="two-column">
+          <article class="finding">
+            <h3>Root usage contradicts direct-file usage</h3>
+            <p>Root help says <code>chartmux &lt;command&gt;</code> and presents <code>show</code> as the dataset entry point. The convenient <code>chartmux sales.csv ...</code> form works but is not discoverable there. Unknown words such as <code>demos</code> and <code>schema</code> consequently become file paths.</p>
+          </article>
+          <article class="finding">
+            <h3>Allowed values and defaults are hidden</h3>
+            <p>Normal help does not list values/defaults for <code>--export</code>, <code>--terminal-mode</code>, <code>--layout</code>, <code>--orientation</code>, <code>--type</code>, or image dimensions. Users only learn many enums by deliberately entering an invalid value.</p>
+          </article>
+          <article class="finding">
+            <h3>Inference is excellent but undocumented in help</h3>
+            <p>Chartmux correctly inferred the category column and numeric series from CSV. Neither root nor command help explains this, encouraging unnecessarily verbose commands.</p>
+          </article>
+          <article class="finding">
+            <h3>Generic flags obscure each command’s contract</h3>
+            <p>Bar help includes curve and bins; line help includes marks and orientation. Users cannot tell whether options are shared, ignored, or invalid until they run a command.</p>
+          </article>
+          <article class="finding">
+            <h3>Demo defaults and catalogue context are missing</h3>
+            <p><code>demo [name]</code> silently defaults to line. <code>demo --list</code> returns names without one-line descriptions. Misspellings do not suggest the nearest demo.</p>
+          </article>
+          <article class="finding">
+            <h3>Fallback tables look like successful visual charts</h3>
+            <p>Pie, donut, heatmap, radar, and funnel Unicode modes become value tables. A table is a reasonable fallback, but the UI does not label it as a reduced presentation.</p>
+          </article>
+          <article class="finding">
+            <h3>Horizontal category ordering is unexplained</h3>
+            <p>The correct horizontal PNG showed June at the top and January at the bottom, reversing CSV order. This may be intentional chart convention, but it is not documented.</p>
+          </article>
+          <article class="finding">
+            <h3>Exit-code policy is not documented</h3>
+            <p>Parser/usage failures returned 80 while data/spec/render failures returned 1. The distinction can be useful to automation, but users have no contract to rely on.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="desires">
+        <h2>Unsupported desires</h2>
+        <p class="section-intro">These are capabilities users naturally attempted or explicitly wanted after using the tool. They should be prioritized independently from bugs.</p>
+        <table>
+          <thead><tr><th>Desire</th><th>User value</th><th>Observed attempt</th></tr></thead>
+          <tbody>
+            <tr><td>Normalized spec output</td><td>Generate a strict, reviewable JSON chart contract after inference.</td><td><code>--export json</code></td></tr>
+            <tr><td>Validation-only operation</td><td>Check specs and data in CI without creating an artifact.</td><td><code>show chart.json --validate</code></td></tr>
+            <tr><td>Print installed schema</td><td>Author specs without reaching into repository files.</td><td><code>chartmux schema</code></td></tr>
+            <tr><td>Version output</td><td>Record reproducible automation environments.</td><td><code>chartmux --version</code></td></tr>
+            <tr><td>Artifact streaming</td><td>Compose PNG/SVG/HTML in Unix pipelines.</td><td><code>--output -</code></td></tr>
+            <tr><td>Plain terminal output</td><td>Logs, snapshots, CI output, and accessible downstream processing.</td><td><code>--no-color</code> and <code>NO_COLOR=1</code></td></tr>
+            <tr><td>Native sorting</td><td>Create ranked horizontal charts without preprocessing.</td><td><code>--sort revenue:desc</code></td></tr>
+            <tr><td>Interactive demo gallery</td><td>Browse chart types without restarting commands.</td><td><code>demo --all --watch</code></td></tr>
+            <tr><td>Watch-mode help and navigation</td><td>Discover shortcuts and move among samples/points.</td><td><kbd>?</kbd> and arrow keys</td></tr>
+            <tr><td>Fuzzy demo suggestions</td><td>Recover quickly from <code>lin</code>, <code>demos</code>, and similar mistakes.</td><td><code>demo lin</code></td></tr>
+            <tr><td>Visual Unicode fallbacks</td><td>Keep pie, heatmap, radar, funnel, and donut recognizable without graphics protocols.</td><td>Current modes fall back to tables.</td></tr>
+            <tr><td>Audit summary</td><td>Confirm the resolved type/layout/orientation/rows/series after inference.</td><td>Suggested form: <code>bar · stacked · vertical · 6 rows · 2 series</code></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="successes">
+        <h2>What worked well</h2>
+        <div class="two-column">
+          <article class="finding"><h3>Fast CSV path</h3><p>Direct file invocation, stdin piping, category inference, and numeric-series inference all worked on the first attempt.</p></article>
+          <article class="finding"><h3>Actionable data validation</h3><p>Unknown columns listed available columns. Empty stdin, malformed JSON, nonnumeric values, unknown fields, and unsupported spec versions failed clearly.</p></article>
+          <article class="finding"><h3>Strong export engines</h3><p>PNG, SVG, and standalone HTML outputs were valid, correctly sized, visually polished, and left no artifact behind after failed renders.</p></article>
+          <article class="finding"><h3>Deterministic artifacts</h3><p>Repeated PNG, SVG, and HTML exports were byte-for-byte identical. This directly supports CI and version-controlled output.</p></article>
+          <article class="finding"><h3>Strict saved contract</h3><p>A user authored a valid saved spec from the README alone. Unknown JSON fields and version mismatches failed early and precisely.</p></article>
+          <article class="finding"><h3>Responsive watch mode</h3><p>Resizing a PTY from too small to <code>100×30</code> redrew the complete chart correctly, and <kbd>q</kbd> consistently restored terminal state.</p></article>
+          <article class="finding"><h3>Clipboard integration</h3><p>PNG export with <code>--copy</code> worked on the macOS host and produced a valid file at the same time.</p></article>
+          <article class="finding"><h3>Compact line rendering</h3><p>At the supported minimum size, line charts remained legible by selectively dropping x-axis tick labels.</p></article>
+        </div>
+      </section>
+
+      <section id="sessions">
+        <h2>Session evidence</h2>
+        <p class="section-intro">Condensed chronological transcripts retain the commands and outcomes that drove the findings. Harness/setup mistakes are called out separately from product behavior.</p>
+
+        <details>
+          <summary>Session A · first-time data analyst</summary>
+          <div class="details-body">
+            <p>The evaluator read the README and root help, created a six-row sales CSV, then exercised direct-file line charts, grouped/stacked/horizontal bars, stdin, PNG, inference, invalid flags, invalid columns, minimum sizes, and color handling.</p>
+            <pre><code>chartmux sales.csv --type line --x month --series revenue,cost       → line rendered, exit 0
+chartmux bar sales.csv --x month --series revenue,cost --layout grouped
+                                                                    → grouped bars rendered, exit 0
+chartmux bar sales.csv --x month --series revenue,cost --layout stacked
+                                                                    → stacked bars rendered, exit 0
+chartmux bar sales.csv --x month --series revenue,cost --orientation horizontal
+                                                                    → blank terminal chart, exit 0
+cat sales.csv | chartmux line - --x month --series revenue,cost      → rendered, exit 0
+chartmux bar sales.csv ... --stacked                                → unknown flag, exit 80
+chartmux line sales.csv ... --export png --output analyst.png       → valid 640×360 PNG
+chartmux bar sales.csv ... --orientation horizontal --export png    → valid horizontal PNG
+chartmux line sales.csv --width 64 --height 8                        → x/series inference worked
+chartmux line sales.csv --series revenues                           → valid columns listed, exit 1
+NO_COLOR=1 chartmux line sales.csv --width 40 --height 8             → ANSI remained, exit 0</code></pre>
+            <p>One initial harness call failed because the requested temporary working directory had not yet been created. Chartmux did not run; this was correctly excluded from product findings.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Session B · automation engineer</summary>
+          <div class="details-body">
+            <p>The evaluator authored JSON and CSV fixtures from public documentation, rendered every export format, checked files with ordinary shell tools, repeated outputs for hashes, and probed strictness and pipeline behavior.</p>
+            <pre><code>chartmux visitors.json --export png --output visitors.png             → valid 1200×720 PNG
+chartmux visitors.json --export svg --output visitors.svg \
+  --image-width 800 --image-height 450                               → valid 800×450 SVG
+chartmux visitors.json --export html --output visitors.html --theme dark
+                                                                    → self-contained HTML, no script
+sed -n '1,5p' sales.csv | chartmux line - ... --export svg           → valid stdin export
+: | chartmux line - --x month --series revenue                       → "input is empty", exit 1
+chartmux unknown-field.json --export svg                             → precise unknown field, exit 1
+chartmux malformed.json --export png                                 → precise JSON error, exit 1
+chartmux line bad-values.csv ...                                     → row/field numeric error, exit 1
+chartmux line sales.csv --export json --output normalized.json       → unsupported, exit 80
+chartmux show visitors.json --validate                               → unsupported, exit 80
+chartmux line sales.csv --export svg --output -                      → literal file named "-"
+chartmux visitors.json --export png --copy                           → file and clipboard worked
+repeat PNG / SVG / HTML renders                                      → identical SHA-256 hashes
+chartmux --version                                                   → unsupported, exit 80
+chartmux line sales.csv --type bar ... --export html                 → success, still line
+chartmux demo line --width 40 --height 8 &gt; redirected.txt            → ANSI in non-TTY output</code></pre>
+            <p>One grep looked for all HTTP URLs and matched SVG’s XML namespace while checking whether HTML had external assets. A narrower script-tag check showed that the document was self-contained. This was a tester mistake, not a Chartmux defect.</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Session C · terminal and TUI enthusiast</summary>
+          <div class="details-body">
+            <p>The evaluator listed and ran the complete catalogue, exercised PTY watch mode and live resizing, forced each terminal mode, tried common interactive keys, compared display-flag output byte-for-byte, and tested invalid option combinations.</p>
+            <pre><code>chartmux demo --list                                                   → 15 demos
+chartmux demo --all --width 50 --height 8                             → all ran; several table fallbacks
+chartmux demo line --watch --terminal-mode unicode                    → ?, arrows, g had no effect; q exited
+chartmux demo stacked-bar --watch                                     → footer advertised g; no feedback
+chartmux demo line --watch --terminal-mode kitty                      → protocol payload/glyph corruption
+resize watch 50×12 → 100×30                                          → correct live redraw
+resize watch 100×30 → 24×8                                           → diagnostic truncated
+chartmux demos                                                        → treated as filename, exit 1
+chartmux demo lin                                                     → no suggestion, exit 1
+chartmux demo line --terminal-mode ansi                               → valid modes listed, exit 80
+chartmux demo line --export jpg                                      → valid exports listed, exit 80
+chartmux demo line --export terminal --output terminal.txt           → path ignored, exit 0
+chartmux histogram data.csv --bins=-1                                → silently accepted, exit 0
+baseline vs --show-values                                             → byte-for-byte identical
+baseline vs --hide-axes                                               → byte-for-byte identical
+baseline vs --hide-legend                                             → correctly different
+chartmux demo --all --watch                                          → unsupported combination, exit 1</code></pre>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <footer>
+      <span>Source-blind usability evaluation</span>
+      <span>Binary built from the current Chartmux working tree</span>
+    </footer>
+  </article>
+</body>
+</html>
