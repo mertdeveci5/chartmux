@@ -38,7 +38,6 @@
   },
   "homepage": "https://github.com/mertdeveci5/chartmux#readme",
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   }
 }
