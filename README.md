@@ -10,6 +10,12 @@ With Homebrew:
 brew install mertdeveci5/tap/chartmux
 ```
 
+With npm:
+
+```bash
+npm install --global chartmux
+```
+
 With Go:
 
 ```bash
