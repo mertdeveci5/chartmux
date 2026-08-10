@@ -4,13 +4,19 @@
 
 ## Install
 
+With Homebrew:
+
+```bash
+brew install mertdeveci5/tap/chartmux
+```
+
 With Go:
 
 ```bash
 go install github.com/mertdeveci5/chartmux/cmd/chartmux@latest
 ```
 
-Prebuilt macOS, Linux, and Windows binaries are published on [GitHub Releases](https://github.com/mertdeveci5/chartmux/releases). Homebrew and npm installation are described below once their registry packages are available.
+Prebuilt macOS, Linux, and Windows binaries are published on [GitHub Releases](https://github.com/mertdeveci5/chartmux/releases).
 
 ## Build and try it
 
