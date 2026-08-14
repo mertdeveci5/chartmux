@@ -388,9 +388,23 @@ func nonWhitePixels(image interface{ At(int, int) color.Color }, left, top, righ
 	return count
 }
 
+func matchingRGBPixels(image interface{ At(int, int) color.Color }, left, top, right, bottom int, wantRed, wantGreen, wantBlue uint8) int {
+	count := 0
+	for y := top; y < bottom; y++ {
+		for x := left; x < right; x++ {
+			red, green, blue, alpha := image.At(x, y).RGBA()
+			if alpha > 0 && uint8(red>>8) == wantRed && uint8(green>>8) == wantGreen && uint8(blue>>8) == wantBlue {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 func TestRadarMissingValuesDoNotDestroyScale(t *testing.T) {
 	spec, _ := Demo("radar")
 	spec.Max = 0
+	spec.Labels = &DisplaySpec{Show: true}
 	spec.Data[0]["desktop"] = nil
 	chart, err := New(spec)
 	if err != nil {
@@ -403,6 +417,9 @@ func TestRadarMissingValuesDoNotDestroyScale(t *testing.T) {
 	var svg bytes.Buffer
 	if err := chart.WriteSVG(&svg, ImageOptions{Width: 800, Height: 480}); err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(svg.String(), ">0</text>") {
+		t.Fatalf("missing radar point was mislabeled as zero:\n%s", svg.String())
 	}
 }
 
@@ -462,6 +479,431 @@ func TestGraphicalDisplayOptionsChangeOutput(t *testing.T) {
 	secondFooter := render(t, line)
 	if firstFooter == secondFooter || !strings.Contains(firstFooter, "first footer") {
 		t.Fatal("footer was not rendered into SVG output")
+	}
+}
+
+func TestGraphicalComboMissingBarDoesNotRenderAsMaximum(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Combo,
+		XAxis:   AxisSpec{DataKey: "month"},
+		Series: []SeriesSpec{
+			{DataKey: "revenue", Label: "Revenue", Mark: MarkBar},
+			{DataKey: "margin", Label: "Margin", Mark: MarkLine},
+		},
+		Data: []Row{
+			{"month": "Jan", "revenue": nil, "margin": 20},
+			{"month": "Feb", "revenue": 100, "margin": 25},
+			{"month": "Mar", "revenue": 120, "margin": 24},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WritePNG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	image, err := png.Decode(bytes.NewReader(output.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pixels := matchingRGBPixels(image, 60, 100, 295, 420, 37, 99, 235); pixels > 100 {
+		t.Fatalf("missing combo bar rendered %d series-colored pixels, want no filled bar", pixels)
+	}
+}
+
+func TestGraphicalComboRejectsSignedRangeInsteadOfMisrepresentingBars(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Combo,
+		XAxis:   AxisSpec{DataKey: "period"},
+		Series: []SeriesSpec{
+			{DataKey: "variance", Label: "Variance", Mark: MarkBar},
+			{DataKey: "margin", Label: "Margin", Mark: MarkLine},
+		},
+		Data: []Row{
+			{"period": "Q1", "variance": -100, "margin": 20},
+			{"period": "Q2", "variance": 0, "margin": 25},
+			{"period": "Q3", "variance": 100, "margin": 30},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err = chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480})
+	if err == nil || !strings.Contains(err.Error(), "signed combo") {
+		t.Fatalf("signed combo export error = %v", err)
+	}
+}
+
+func TestGraphicalBarsUseSquareCapsAndContainMissingValues(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		Title:   "Missing stacked bar",
+		XAxis:   AxisSpec{DataKey: "period"},
+		Series: []SeriesSpec{
+			{DataKey: "senior", Label: "Senior debt"},
+			{DataKey: "junior", Label: "Junior debt"},
+		},
+		Layout: Stacked,
+		Data: []Row{
+			{"period": "Base", "senior": 10, "junior": nil},
+			{"period": "Upside", "senior": 20, "junior": 5},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	if strings.Contains(svg, "A ") {
+		t.Fatalf("bar SVG contains radius-by-width arc caps:\n%s", svg)
+	}
+	if regexp.MustCompile(`(?:M|L) [0-9]+ -[0-9]+`).MatchString(svg) {
+		t.Fatalf("missing stacked value produced geometry above the SVG frame:\n%s", svg)
+	}
+}
+
+func TestGraphicalMissingStackedPointDoesNotHideValidSeriesLabels(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		XAxis:   AxisSpec{DataKey: "case"},
+		Series: []SeriesSpec{
+			{DataKey: "senior", Label: "Senior"},
+			{DataKey: "revolver", Label: "Revolver"},
+			{DataKey: "junior", Label: "Junior"},
+		},
+		Layout: Stacked,
+		Labels: &DisplaySpec{Show: true},
+		Data: []Row{
+			{"case": "Base", "senior": 500, "revolver": 0, "junior": 75},
+			{"case": "Upside", "senior": 500, "revolver": 40, "junior": 0.2},
+			{"case": "Downside", "senior": 500, "revolver": 125, "junior": nil},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 1000, Height: 600}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	if !strings.Contains(svg, ">75</text>") {
+		t.Fatalf("missing point suppressed an earlier valid stacked label:\n%s", svg)
+	}
+	if strings.Contains(svg, ">0.2</text>") {
+		t.Fatalf("sub-pixel stacked segment received a colliding direct label:\n%s", svg)
+	}
+	if strings.Contains(svg, "179,769") {
+		t.Fatalf("missing point leaked its sentinel into stacked labels:\n%s", svg)
+	}
+}
+
+func TestGraphicalSignedBarsDoNotDrawZeroAsAFullBar(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		XAxis:   AxisSpec{DataKey: "case"},
+		Series:  []SeriesSpec{{DataKey: "variance", Label: "Variance"}},
+		Labels:  &DisplaySpec{Show: true},
+		Data: []Row{
+			{"case": "Large loss", "variance": -125},
+			{"case": "Tiny loss", "variance": -0.2},
+			{"case": "Zero", "variance": 0},
+			{"case": "Tiny gain", "variance": 0.1},
+			{"case": "Gain", "variance": 87},
+			{"case": "Outlier", "variance": 500},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(output.String(), "stroke:none;fill:rgb(37,99,235)"); count != 5 {
+		t.Fatalf("signed bar SVG contains %d filled bars, want five non-zero values:\n%s", count, output.String())
+	}
+}
+
+func TestGraphicalSignedStacksSuppressSubPixelLabels(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		XAxis:   AxisSpec{DataKey: "case"},
+		Series: []SeriesSpec{
+			{DataKey: "base", Label: "Base"},
+			{DataKey: "downside", Label: "Downside"},
+			{DataKey: "stub", Label: "Stub"},
+		},
+		Layout: Stacked,
+		Labels: &DisplaySpec{Show: true},
+		Data:   []Row{{"case": "Case A", "base": 500, "downside": -100, "stub": 0.2}},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	if !strings.Contains(svg, ">500</text>") || !strings.Contains(svg, ">-100</text>") {
+		t.Fatalf("signed stack lost material labels:\n%s", svg)
+	}
+	if strings.Contains(svg, ">0.2</text>") {
+		t.Fatalf("signed stack rendered a colliding sub-pixel label:\n%s", svg)
+	}
+}
+
+func TestGraphicalHorizontalBarsPreserveInputOrder(t *testing.T) {
+	spec, _ := Demo("horizontal-bar")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	jan := strings.Index(svg, ">Jan</text>")
+	jun := strings.Index(svg, ">Jun</text>")
+	if jan < 0 || jun < 0 || jan > jun {
+		t.Fatalf("horizontal bar categories are not top-to-bottom input order: Jan=%d Jun=%d\n%s", jan, jun, svg)
+	}
+}
+
+func TestGraphicalCompactHorizontalBarsKeepEveryCategoryLabel(t *testing.T) {
+	spec, _ := Demo("horizontal-bar")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 480, Height: 300}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	for _, label := range []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun"} {
+		if !strings.Contains(svg, ">"+label+"</text>") {
+			t.Fatalf("compact horizontal bar SVG is missing %q:\n%s", label, svg)
+		}
+	}
+}
+
+func TestGraphicalDenseHorizontalBarsThinCategoryLabels(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		XAxis:   AxisSpec{DataKey: "category"},
+		Series:  []SeriesSpec{{DataKey: "value", Label: "Value"}},
+	}
+	for index := 0; index < 30; index++ {
+		spec.Data = append(spec.Data, Row{"category": fmt.Sprintf("Category %02d", index), "value": index + 1})
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 480, Height: 300}); err != nil {
+		t.Fatal(err)
+	}
+	count := len(regexp.MustCompile(`>Category [0-9]{2}</text>`).FindAllString(output.String(), -1))
+	if count >= len(spec.Data) {
+		t.Fatalf("dense horizontal chart forced all %d category labels into 300px:\n%s", count, output.String())
+	}
+}
+
+func TestGraphicalNormalizedBarsUseQuarterScale(t *testing.T) {
+	spec, _ := Demo("normalized-bar")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	for _, tick := range []string{"0%", "25%", "50%", "75%", "100%"} {
+		if !strings.Contains(svg, ">"+tick+"</text>") {
+			t.Fatalf("normalized bar SVG is missing %q tick:\n%s", tick, svg)
+		}
+	}
+	if strings.Contains(svg, "11.11") {
+		t.Fatalf("normalized bar SVG contains fractional 11.11%% ticks:\n%s", svg)
+	}
+}
+
+func TestGraphicalHeatmapKeepsRowsOrderedAndMissingCellsNeutral(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Heatmap,
+		Title:   "Regional sensitivity",
+		XAxis:   AxisSpec{DataKey: "region"},
+		Series: []SeriesSpec{
+			{DataKey: "base", Label: "Base case"},
+			{DataKey: "downside", Label: "Downside case"},
+		},
+		Labels: &DisplaySpec{Show: true},
+		Data: []Row{
+			{"region": "North America", "base": 10, "downside": nil},
+			{"region": "Rest of Asia Pacific", "base": 8, "downside": 20},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	north := strings.Index(svg, ">North America</text>")
+	rest := strings.Index(svg, ">Rest of Asia Pacific</text>")
+	if north < 0 || rest < 0 || north > rest {
+		t.Fatalf("heatmap rows are not top-to-bottom input order: North America=%d Rest APAC=%d\n%s", north, rest, svg)
+	}
+	if !strings.Contains(svg, ">–</text>") || strings.Contains(svg, "179,769") {
+		t.Fatalf("heatmap missing cell was not rendered as a neutral dash:\n%s", svg)
+	}
+	if strings.Contains(svg, ">2</text>") {
+		t.Fatalf("heatmap SVG contains a synthetic row-axis tick:\n%s", svg)
+	}
+}
+
+func TestGraphicalDarkHeatmapUsesDarkTextOnBrightCustomCells(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Heatmap,
+		Theme:   "dark",
+		XAxis:   AxisSpec{DataKey: "case"},
+		Series:  []SeriesSpec{{DataKey: "value", Label: "Value", Color: "#F8FAFC"}},
+		Labels:  &DisplaySpec{Show: true},
+		Data:    []Row{{"case": "High", "value": 100}, {"case": "Low", "value": 0}},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`fill:rgb\(24,24,27\)[^>]*>100</text>`).MatchString(output.String()) {
+		t.Fatalf("bright dark-theme heatmap cell lacks dark contrast text:\n%s", output.String())
+	}
+}
+
+func TestGraphicalDonutSuppressesCollidingTinySliceLabels(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Donut,
+		XAxis:   AxisSpec{DataKey: "segment"},
+		Series:  []SeriesSpec{{DataKey: "value", Label: "Share"}},
+		Labels:  &DisplaySpec{Show: true},
+		Data: []Row{
+			{"segment": "Core", "value": 970},
+			{"segment": "Tail A", "value": 15},
+			{"segment": "Tail B", "value": 10},
+			{"segment": "Tail C", "value": 5},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	if strings.Count(svg, "Core") < 2 {
+		t.Fatalf("dominant donut slice lost its direct label:\n%s", svg)
+	}
+	for _, label := range []string{"Tail A", "Tail B", "Tail C"} {
+		if count := strings.Count(svg, label); count != 1 {
+			t.Fatalf("tiny slice %q occurs %d times, want legend only:\n%s", label, count, svg)
+		}
+	}
+}
+
+func TestGraphicalFunnelKeepsExtremeStagesVisibleAndExact(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Funnel,
+		XAxis:   AxisSpec{DataKey: "stage"},
+		Series:  []SeriesSpec{{DataKey: "value", Label: "Opportunities"}},
+		Labels:  &DisplaySpec{Show: true},
+		Data: []Row{
+			{"stage": "Screened", "value": 1_000_000},
+			{"stage": "Qualified", "value": 950_000},
+			{"stage": "Term sheets", "value": 10_000},
+			{"stage": "IC approved", "value": 250},
+			{"stage": "Closed", "value": 1},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	widths := chart.graphicalFunnelWidths(500)
+	if widths[0] != 500 || widths[len(widths)-1] < 3 {
+		t.Fatalf("funnel stage widths = %v, want exact maximum and a visible positive minimum", widths)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 1000, Height: 600}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	for _, expected := range []string{"Screened", "Qualified", "Term sheets", "IC approved", "Closed", "of initial"} {
+		if !strings.Contains(svg, expected) {
+			t.Fatalf("funnel SVG is missing %q:\n%s", expected, svg)
+		}
+	}
+}
+
+func TestGraphicalFunnelCallsFallbackDenominatorPeak(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Funnel,
+		XAxis:   AxisSpec{DataKey: "stage"},
+		Series:  []SeriesSpec{{DataKey: "value", Label: "Opportunities"}},
+		Labels:  &DisplaySpec{Show: true},
+		Data: []Row{
+			{"stage": "Unreported intake", "value": nil},
+			{"stage": "Qualified", "value": 100},
+			{"stage": "Closed", "value": 50},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "of peak") || strings.Contains(output.String(), "of initial") {
+		t.Fatalf("funnel fallback denominator is mislabeled:\n%s", output.String())
 	}
 }
 
@@ -1259,7 +1701,7 @@ func TestMissingValueDoesNotBreakAnyDemoRenderer(t *testing.T) {
 }
 
 func TestAllMissingSeriesRenderAsEmptyData(t *testing.T) {
-	for _, name := range []string{"line", "pie", "donut", "heatmap", "radar", "funnel"} {
+	for _, name := range []string{"grouped-bar", "line", "area", "combo", "scatter", "pie", "donut", "heatmap", "radar", "funnel"} {
 		t.Run(name, func(t *testing.T) {
 			spec, _ := Demo(name)
 			for rowIndex := range spec.Data {
@@ -1277,6 +1719,9 @@ func TestAllMissingSeriesRenderAsEmptyData(t *testing.T) {
 			var svg bytes.Buffer
 			if err := chart.WriteSVG(&svg, ImageOptions{Width: 900, Height: 600}); err != nil {
 				t.Fatalf("SVG: %v", err)
+			}
+			if !strings.Contains(svg.String(), ">No data</text>") {
+				t.Fatalf("all-missing SVG did not render an explicit empty state:\n%s", svg.String())
 			}
 		})
 	}

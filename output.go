@@ -141,7 +141,22 @@ func (chart *Chart) bytes(format string, width, height int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if renderChart.allValuesMissing() {
+		painter := measurementPainter
+		painter.FilledRect(0, 0, width, height, theme.GetBackgroundColor(), charts.ColorTransparent, 0)
+		chart.drawGraphicalText(painter, textLayout, theme, format == charts.ChartOutputSVG, width, height, 0)
+		plotPainter := painter.Child(charts.PainterBoxOption(textLayout.plotBox(width, height)))
+		drawGraphicalNoData(plotPainter, theme)
+		content, err := painter.Bytes()
+		if err != nil {
+			return nil, fmt.Errorf("encode %s chart: %w", format, err)
+		}
+		return content, nil
+	}
 	if renderChart.spec.Type == Combo {
+		if renderChart.comboHasBarsOnSignedRange() {
+			return nil, fmt.Errorf("image export cannot render a signed combo accurately; use a signed bar chart or keep the shared combo range non-negative")
+		}
 		option := renderChart.comboOption(theme, width, height, format)
 		option.Box = textLayout.plotBox(width, height)
 		painter, err := charts.Render(option)
@@ -181,14 +196,24 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 
 	switch chart.spec.Type {
 	case Bar, Histogram:
-		series := charts.NewSeriesListBar(values, charts.BarSeriesOption{Names: chart.seriesNames(), Label: label})
+		if !chart.allNonNegative() {
+			return chart.drawGraphicalSignedBars(painter, theme, showAxes, showLabels)
+		}
+		horizontal := chart.spec.Orientation == Horizontal
+		series, categoryLabels := chart.graphicalBarSeries(showLabels, horizontal)
 		option := charts.NewBarChartOptionWithSeries(series)
 		option.Theme = theme
 		option.Title = title
 		option.Legend = legend
-		option.Horizontal = chart.spec.Orientation == Horizontal
-		option.CategoryAxis.Labels = chart.labels
+		option.Horizontal = horizontal
+		option.CategoryAxis.Labels = categoryLabels
 		option.CategoryAxis.Show = charts.Ptr(showAxes)
+		if horizontal {
+			option.CategoryAxis.LabelFontStyle = charts.NewFontStyleWithSize(9.5)
+			if len(categoryLabels) > 0 && painter.Height()/len(categoryLabels) >= 24 {
+				option.CategoryAxis.LabelCount = len(categoryLabels)
+			}
+		}
 		option.ValueAxis[0].Show = charts.Ptr(showAxes)
 		option.ValueAxis[0].PreferNiceIntervals = charts.Ptr(true)
 		if chart.allNonNegative() {
@@ -196,9 +221,15 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 		}
 		if chart.spec.Layout == Normalized {
 			option.ValueAxis[0].Max = charts.Ptr(100.0)
+			option.ValueAxis[0].Unit = 25
+			option.ValueAxis[0].LabelCount = 5
+			option.ValueAxis[0].PreferNiceIntervals = charts.Ptr(false)
+			option.ValueAxis[0].ValueFormatter = func(value float64) string {
+				return formatValue(value) + "%"
+			}
 		}
 		option.StackSeries = charts.Ptr(chart.spec.Layout == Stacked || chart.spec.Layout == Normalized)
-		option.RoundedBarCaps = charts.Ptr(true)
+		option.RoundedBarCaps = charts.Ptr(false)
 		return painter.BarChart(option)
 	case Line, Area:
 		series := charts.NewSeriesListLine(values, charts.LineSeriesOption{Names: chart.seriesNames(), Label: label})
@@ -229,7 +260,9 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 	case Scatter:
 		return chart.drawScatter(painter, theme, showAxes, showLabels)
 	case Pie:
-		series := charts.NewSeriesListPie(values[0], charts.PieSeriesOption{Names: chart.labels, Label: label})
+		polarValues := chart.graphicalPolarValues()
+		polarLabel := graphicalPolarLabel(polarValues, showLabels)
+		series := charts.NewSeriesListPie(polarValues, charts.PieSeriesOption{Names: chart.labels, Label: polarLabel})
 		option := charts.PieChartOption{
 			Theme:      theme,
 			SeriesList: series,
@@ -238,7 +271,9 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 		}
 		return painter.PieChart(option)
 	case Donut:
-		series := charts.NewSeriesListDoughnut(values[0], charts.DoughnutSeriesOption{Names: chart.labels, Label: label})
+		polarValues := chart.graphicalPolarValues()
+		polarLabel := graphicalPolarLabel(polarValues, showLabels)
+		series := charts.NewSeriesListDoughnut(polarValues, charts.DoughnutSeriesOption{Names: chart.labels, Label: polarLabel})
 		option := charts.DoughnutChartOption{
 			Theme:        theme,
 			SeriesList:   series,
@@ -248,30 +283,10 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 		}
 		return painter.DoughnutChart(option)
 	case Heatmap:
-		rows := make([][]float64, len(chart.labels))
-		for rowIndex := range rows {
-			rows[rowIndex] = make([]float64, len(chart.series))
-			for seriesIndex := range chart.series {
-				rows[rowIndex][seriesIndex] = chart.series[seriesIndex].values[rowIndex]
-			}
-		}
-		option := charts.NewHeatMapOptionWithData(rows)
-		option.Theme = theme
-		if !showAxes {
-			option.Theme = theme.
-				WithXAxisColor(charts.ColorTransparent).
-				WithYAxisColor(charts.ColorTransparent).
-				WithXAxisTextColor(charts.ColorTransparent).
-				WithYAxisTextColor(charts.ColorTransparent)
-		}
-		option.Title = title
-		option.XAxis.Labels = chart.seriesNames()
-		option.YAxis.Labels = chart.labels
-		option.ValuesLabel = label
-		return painter.HeatMapChart(option)
+		return chart.drawGraphicalHeatmap(painter, theme, showAxes, showLabels)
 	case Radar:
 		maxima := chart.radarMaxima()
-		series := charts.NewSeriesListRadar(values, charts.RadarSeriesOption{Names: chart.seriesNames(), Label: label})
+		series := chart.graphicalRadarSeries(showLabels)
 		option := charts.RadarChartOption{
 			Theme:           theme,
 			SeriesList:      series,
@@ -281,14 +296,8 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 		}
 		return painter.RadarChart(option)
 	case Funnel:
-		series := charts.NewSeriesListFunnel(values[0], charts.FunnelSeriesOption{Names: chart.labels, Label: label})
-		option := charts.FunnelChartOption{
-			Theme:      theme,
-			SeriesList: series,
-			Title:      title,
-			Legend:     charts.LegendOption{Show: charts.Ptr(displayValue(chart.spec.Legend, false)), SeriesNames: chart.labels},
-		}
-		return painter.FunnelChart(option)
+		showStageText := showLabels || displayValue(chart.spec.Legend, false)
+		return chart.drawGraphicalFunnel(painter, theme, showStageText)
 	default:
 		return fmt.Errorf("chart type %q has no output engine", chart.spec.Type)
 	}
@@ -296,13 +305,28 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 
 func (chart *Chart) comboOption(theme charts.ColorPalette, width, height int, format string) charts.ChartOption {
 	series := make(charts.GenericSeriesList, len(chart.series))
-	label := charts.SeriesLabel{Show: charts.Ptr(displayValue(chart.spec.Labels, false))}
+	showLabels := displayValue(chart.spec.Labels, false)
 	for index, item := range chart.series {
 		chartType := charts.ChartTypeLine
+		values := append([]float64(nil), item.values...)
+		label := charts.SeriesLabel{Show: charts.Ptr(showLabels)}
 		if item.spec.Mark == MarkBar {
 			chartType = charts.ChartTypeBar
+			for valueIndex, value := range values {
+				if isMissing(value) {
+					values[valueIndex] = math.SmallestNonzeroFloat64
+				}
+			}
+			if showLabels {
+				label.LabelFormatter = func(_ int, _ string, value float64) (string, *charts.LabelStyle) {
+					if value == math.SmallestNonzeroFloat64 {
+						return "", nil
+					}
+					return formatValue(value), nil
+				}
+			}
 		}
-		series[index] = charts.GenericSeries{Type: chartType, Values: item.values, Name: item.spec.Label, Label: label}
+		series[index] = charts.GenericSeries{Type: chartType, Values: values, Name: item.spec.Label, Label: label}
 	}
 	showAxes := displayValue(chart.spec.Axes, true)
 	option := charts.ChartOption{
@@ -321,6 +345,20 @@ func (chart *Chart) comboOption(theme charts.ColorPalette, width, height int, fo
 		option.YAxis[0].Min = charts.Ptr(0.0)
 	}
 	return option
+}
+
+func (chart *Chart) comboHasBarsOnSignedRange() bool {
+	hasBar := false
+	hasNegative := false
+	for _, series := range chart.series {
+		hasBar = hasBar || series.spec.Mark == MarkBar
+		for _, value := range series.values {
+			if !isMissing(value) && value < 0 {
+				hasNegative = true
+			}
+		}
+	}
+	return hasBar && hasNegative
 }
 
 func (chart *Chart) drawScatter(painter *charts.Painter, theme charts.ColorPalette, showAxes, showLabels bool) error {
