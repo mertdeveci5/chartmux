@@ -58,7 +58,7 @@ const (
 type Row map[string]any
 
 type AxisSpec struct {
-	DataKey string `json:"dataKey"`
+	DataKey string `json:"dataKey,omitempty"`
 	Kind    string `json:"kind,omitempty"`
 }
 
@@ -81,7 +81,7 @@ type Spec struct {
 	Description string       `json:"description,omitempty"`
 	Footer      string       `json:"footer,omitempty"`
 	Data        []Row        `json:"data"`
-	XAxis       AxisSpec     `json:"xAxis"`
+	XAxis       AxisSpec     `json:"xAxis,omitzero"`
 	Series      []SeriesSpec `json:"series"`
 	Layout      Layout       `json:"layout,omitempty"`
 	Orientation Orientation  `json:"orientation,omitempty"`
@@ -92,6 +92,7 @@ type Spec struct {
 	Theme       string       `json:"theme,omitempty"`
 	Bins        int          `json:"bins,omitempty"`
 	Max         float64      `json:"max,omitempty"`
+	Annotations []Annotation `json:"annotations,omitempty"`
 }
 
 type compiledSeries struct {
@@ -100,9 +101,10 @@ type compiledSeries struct {
 }
 
 type Chart struct {
-	spec   Spec
-	labels []string
-	series []compiledSeries
+	spec    Spec
+	labels  []string
+	xValues []float64
+	series  []compiledSeries
 }
 
 func Types() []Type {
@@ -110,6 +112,7 @@ func Types() []Type {
 }
 
 func New(spec Spec) (*Chart, error) {
+	spec = cloneSpec(spec)
 	spec.applyDefaults()
 	if err := spec.validate(); err != nil {
 		return nil, err
@@ -123,6 +126,9 @@ func New(spec Spec) (*Chart, error) {
 	}
 
 	chart.labels = make([]string, len(spec.Data))
+	if spec.Type == Scatter {
+		chart.xValues = make([]float64, len(spec.Data))
+	}
 	chart.series = make([]compiledSeries, len(spec.Series))
 	for index, series := range spec.Series {
 		chart.series[index] = compiledSeries{spec: series, values: make([]float64, len(spec.Data))}
@@ -133,6 +139,16 @@ func New(spec Spec) (*Chart, error) {
 			return nil, fmt.Errorf("data row %d is missing xAxis.dataKey %q", rowIndex+1, spec.XAxis.DataKey)
 		}
 		chart.labels[rowIndex] = scalarLabel(label)
+		if err := validateInlineText(fmt.Sprintf("data row %d x-axis label", rowIndex+1), chart.labels[rowIndex], maxAxisLabelLength); err != nil {
+			return nil, err
+		}
+		if spec.Type == Scatter {
+			value, missing, err := numericValue(label)
+			if err != nil || missing {
+				return nil, fmt.Errorf("data row %d field %q must be numeric for scatter charts", rowIndex+1, spec.XAxis.DataKey)
+			}
+			chart.xValues[rowIndex] = value
+		}
 		for seriesIndex := range chart.series {
 			key := chart.series[seriesIndex].spec.DataKey
 			raw, ok := row[key]
@@ -150,21 +166,35 @@ func New(spec Spec) (*Chart, error) {
 			if requiresNonNegative(spec.Type) && value < 0 {
 				return nil, fmt.Errorf("data row %d field %q must be non-negative for %s charts", rowIndex+1, key, spec.Type)
 			}
+			if spec.Layout == Normalized && value < 0 {
+				return nil, fmt.Errorf("data row %d field %q must be non-negative for normalized charts", rowIndex+1, key)
+			}
 			chart.series[seriesIndex].values[rowIndex] = value
 		}
 	}
 	if spec.Layout == Normalized {
-		normalizeSeries(chart.series)
+		if err := normalizeSeries(chart.series); err != nil {
+			return nil, err
+		}
+	}
+	if spec.Type == Radar && spec.Max > 0 {
+		for _, series := range chart.series {
+			for pointIndex, value := range series.values {
+				if !isMissing(value) && value > spec.Max {
+					return nil, fmt.Errorf("data row %d field %q exceeds radar max %s", pointIndex+1, series.spec.DataKey, formatValue(spec.Max))
+				}
+			}
+		}
 	}
 	return chart, nil
 }
 
 func (chart *Chart) Spec() Spec {
-	return chart.spec
+	return cloneSpec(chart.spec)
 }
 
 func (chart *Chart) ResolvedSpec() Spec {
-	spec := chart.spec
+	spec := cloneSpec(chart.spec)
 	if spec.Schema == "" {
 		spec.Schema = SchemaURL
 	}
@@ -183,6 +213,11 @@ func (chart *Chart) ResolvedSpec() Spec {
 	}
 	if spec.Labels == nil {
 		spec.Labels = &DisplaySpec{Show: false}
+	}
+	for index := range spec.Annotations {
+		if spec.Annotations[index].Position == "" {
+			spec.Annotations[index].Position = AnnotationBottom
+		}
 	}
 	return spec
 }
@@ -233,14 +268,28 @@ func (spec Spec) validate() error {
 	if len(spec.Series) == 0 {
 		return fmt.Errorf("chart spec has no series")
 	}
+	if err := validateTextFields(spec); err != nil {
+		return err
+	}
 	if spec.Type != Histogram && spec.XAxis.DataKey == "" {
 		return fmt.Errorf("chart spec is missing xAxis.dataKey")
+	}
+	if spec.Type == Histogram && spec.XAxis.DataKey == "" && spec.XAxis.Kind != "" {
+		return fmt.Errorf("histogram xAxis.kind requires xAxis.dataKey")
+	}
+	if spec.XAxis.DataKey != "" {
+		if err := validateInlineText("xAxis.dataKey", spec.XAxis.DataKey, maxDataKeyLength); err != nil {
+			return err
+		}
 	}
 	if spec.Theme != "light" && spec.Theme != "dark" {
 		return fmt.Errorf("theme must be light or dark")
 	}
 	if spec.XAxis.Kind != "" && spec.XAxis.Kind != "category" && spec.XAxis.Kind != "number" && spec.XAxis.Kind != "time" {
 		return fmt.Errorf("xAxis.kind must be category, number, or time")
+	}
+	if spec.Type == Scatter && spec.XAxis.Kind != "" && spec.XAxis.Kind != "number" {
+		return fmt.Errorf("scatter xAxis.kind must be number")
 	}
 	if spec.Curve != "" {
 		if spec.Type != Line && spec.Type != Area {
@@ -271,7 +320,7 @@ func (spec Spec) validate() error {
 		return fmt.Errorf("max is only valid for radar charts")
 	}
 	if spec.Max < 0 {
-		return fmt.Errorf("max must be greater than zero")
+		return fmt.Errorf("max must be zero for automatic or greater than zero")
 	}
 	if spec.Type == Histogram && len(spec.Series) != 1 {
 		return fmt.Errorf("histogram charts require exactly one series")
@@ -287,6 +336,12 @@ func (spec Spec) validate() error {
 		if series.DataKey == "" {
 			return fmt.Errorf("series %d is missing dataKey", index+1)
 		}
+		if err := validateInlineText(fmt.Sprintf("series %d dataKey", index+1), series.DataKey, maxDataKeyLength); err != nil {
+			return err
+		}
+		if err := validateInlineText(fmt.Sprintf("series %q label", series.DataKey), series.Label, maxSeriesLabelLength); err != nil {
+			return err
+		}
 		if seen[series.DataKey] {
 			return fmt.Errorf("duplicate series dataKey %q", series.DataKey)
 		}
@@ -301,6 +356,9 @@ func (spec Spec) validate() error {
 		if _, err := colorHex(series.Color); err != nil {
 			return fmt.Errorf("series %q: %w", series.DataKey, err)
 		}
+	}
+	if err := validateAnnotations(spec, seen); err != nil {
+		return err
 	}
 	return nil
 }
@@ -382,7 +440,14 @@ func numericValue(value any) (float64, bool, error) {
 	if math.IsNaN(number) || math.IsInf(number, 0) {
 		return 0, false, fmt.Errorf("value must be finite")
 	}
+	if number == math.MaxFloat64 {
+		return 0, false, fmt.Errorf("value is too large to render")
+	}
 	return number, false, nil
+}
+
+func isMissing(value float64) bool {
+	return value == math.MaxFloat64
 }
 
 func scalarLabel(value any) string {
@@ -392,27 +457,68 @@ func scalarLabel(value any) string {
 	return fmt.Sprint(value)
 }
 
-func normalizeSeries(series []compiledSeries) {
+func normalizeSeries(series []compiledSeries) error {
 	if len(series) == 0 {
-		return
+		return nil
 	}
 	for point := range series[0].values {
 		total := 0.0
+		hasValue := false
 		for index := range series {
 			value := series[index].values[point]
-			if value != math.MaxFloat64 {
+			if !isMissing(value) {
+				hasValue = true
 				total += value
 			}
 		}
-		if total == 0 {
+		if math.IsInf(total, 0) || math.IsNaN(total) {
+			return fmt.Errorf("normalized layout data row %d total is too large to render", point+1)
+		}
+		if !hasValue {
 			continue
 		}
+		if total == 0 {
+			return fmt.Errorf("normalized layout data row %d has no positive values", point+1)
+		}
 		for index := range series {
-			if series[index].values[point] != math.MaxFloat64 {
+			if !isMissing(series[index].values[point]) {
 				series[index].values[point] = series[index].values[point] / total * 100
 			}
 		}
 	}
+	return nil
+}
+
+func cloneSpec(spec Spec) Spec {
+	clone := spec
+	clone.Data = make([]Row, len(spec.Data))
+	for index, row := range spec.Data {
+		clone.Data[index] = make(Row, len(row))
+		for key, value := range row {
+			clone.Data[index][key] = value
+		}
+	}
+	clone.Series = append([]SeriesSpec(nil), spec.Series...)
+	clone.Legend = cloneDisplaySpec(spec.Legend)
+	clone.Axes = cloneDisplaySpec(spec.Axes)
+	clone.Labels = cloneDisplaySpec(spec.Labels)
+	clone.Annotations = make([]Annotation, len(spec.Annotations))
+	for index, annotation := range spec.Annotations {
+		clone.Annotations[index] = annotation
+		if annotation.DataIndex != nil {
+			value := *annotation.DataIndex
+			clone.Annotations[index].DataIndex = &value
+		}
+	}
+	return clone
+}
+
+func cloneDisplaySpec(value *DisplaySpec) *DisplaySpec {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func (chart *Chart) compileHistogram() error {
@@ -455,7 +561,7 @@ func (chart *Chart) compileHistogram() error {
 	for index := range bins {
 		start := minimum + float64(index)*step
 		end := start + step
-		chart.labels[index] = fmt.Sprintf("%g–%g", start, end)
+		chart.labels[index] = formatBinBoundary(start) + "–" + formatBinBoundary(end)
 	}
 	for _, value := range values {
 		index := min(bins-1, int((value-minimum)/step))
@@ -463,6 +569,10 @@ func (chart *Chart) compileHistogram() error {
 	}
 	chart.series = []compiledSeries{{spec: chart.spec.Series[0], values: counts}}
 	return nil
+}
+
+func formatBinBoundary(value float64) string {
+	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(value, 'f', 2, 64), "0"), ".")
 }
 
 func humanize(value string) string {

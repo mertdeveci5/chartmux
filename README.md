@@ -43,23 +43,29 @@ List every built-in example or display them all:
 ./chartmux demo --all
 ```
 
-## High-resolution terminal UI
+## Native terminal UI
 
-One-shot output uses portable Unicode curves and solid terminal bars. The responsive UI uses a real chart image through the Kitty graphics protocol when the terminal supports it, and falls back to Unicode when it does not:
+One-shot output and the responsive UI both use portable Unicode cells: solid and fractional blocks for bars, connected curves for lines, density cells for heatmaps, and proportional block views for categorical charts. The interactive UI is powered by Bubble Tea and remains text-native in every terminal:
 
 ```bash
 ./chartmux demo line --watch
 ./chartmux demo stacked-bar --watch
 ```
 
-Resize the window to resize the chart. When Kitty graphics are available, press `g` to switch between graphics and Unicode. Press `q` to quit. Presentation can also be selected explicitly:
+Resize the window to resize the chart. Press `c` to copy the plain-text chart through the terminal clipboard protocol, `?` for help, `ctrl+z` to suspend, or `q` to quit. PNG, SVG, and HTML remain available as explicit export formats, but interactive terminal charts never switch to an image protocol.
+
+Add collision-safe narrative notes from the CLI. Repeat `--annotation` to add more than one; annotations receive their own reserved band instead of covering chart marks:
 
 ```bash
-./chartmux demo line --watch --terminal-mode kitty
-./chartmux demo line --watch --terminal-mode unicode
+./chartmux demo annotated-bar --watch
+./chartmux demo line --annotation "Growth accelerated after the refinancing"
 ```
 
-`auto` is the default. A nested terminal UI may not pass the graphics protocol through, so Chartmux will use the connected Unicode chart there instead of printing half-block image pixels.
+Saved chart specs can place an annotation above or below the plot and optionally tie its context to a zero-based data row and series key:
+
+```json
+{"text":"Mobile mix expanded","position":"top","dataIndex":5,"series":"mobile","color":"#60A5FA"}
+```
 
 ## Use your own data
 

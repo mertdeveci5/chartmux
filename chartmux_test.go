@@ -2,12 +2,20 @@ package chartmux
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"image/color"
 	"image/png"
+	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/go-analyze/charts"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestParseSpecIsStrictAndVersioned(t *testing.T) {
@@ -46,6 +54,496 @@ func TestEmbeddedSchema(t *testing.T) {
 	}
 }
 
+func TestEveryResolvedDemoMatchesEmbeddedSchema(t *testing.T) {
+	var schemaDocument any
+	if err := json.Unmarshal(SchemaJSON(), &schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource(SchemaURL, schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiledSchema, err := compiler.Compile(SchemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range DemoNames() {
+		t.Run(name, func(t *testing.T) {
+			spec, err := Demo(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			chart, err := New(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if err := chart.WriteJSON(&output); err != nil {
+				t.Fatal(err)
+			}
+			var document any
+			if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+				t.Fatal(err)
+			}
+			if err := compiledSchema.Validate(document); err != nil {
+				t.Fatalf("resolved chart does not match embedded schema: %v\n%s", err, output.String())
+			}
+			parsed, err := ParseSpec(bytes.NewReader(output.Bytes()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := New(parsed); err != nil {
+				t.Fatalf("resolved chart does not round-trip: %v", err)
+			}
+		})
+	}
+}
+
+func TestEmbeddedSchemaRejectsInvalidSeriesColors(t *testing.T) {
+	var schemaDocument any
+	if err := json.Unmarshal(SchemaJSON(), &schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource(SchemaURL, schemaDocument); err != nil {
+		t.Fatal(err)
+	}
+	compiledSchema, err := compiler.Compile(SchemaURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := map[string]any{
+		"version": 1,
+		"type":    "line",
+		"xAxis":   map[string]any{"dataKey": "period"},
+		"series":  []any{map[string]any{"dataKey": "value", "color": "red"}},
+		"data":    []any{map[string]any{"period": "Q1", "value": 1}},
+	}
+	if err := compiledSchema.Validate(document); err == nil {
+		t.Fatal("embedded schema accepted a color outside #RRGGBB and var(--chart-N)")
+	}
+}
+
+func TestSVGAndHTMLEscapeChartText(t *testing.T) {
+	payload := `</text><script>alert(1)</script>`
+	spec := Spec{
+		Version:     SpecVersion,
+		Type:        Line,
+		Title:       "R&D " + payload,
+		Description: payload,
+		Footer:      payload,
+		XAxis:       AxisSpec{DataKey: "x"},
+		Series: []SeriesSpec{
+			{DataKey: "y", Label: payload},
+			{DataKey: "z", Label: "Safe"},
+		},
+		Data:        []Row{{"x": payload, "y": 1, "z": 2}, {"x": "safe", "y": 2, "z": 3}},
+		Annotations: []Annotation{{Text: payload}},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var svg bytes.Buffer
+	if err := chart.WriteSVG(&svg, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(svg.String(), "<script") || !strings.Contains(svg.String(), "&lt;script&gt;") {
+		t.Fatalf("SVG contains executable or missing escaped chart text:\n%s", svg.String())
+	}
+	if !strings.Contains(svg.String(), "R&amp;D") || strings.Contains(svg.String(), "R&amp;amp;D") {
+		t.Fatalf("SVG chart text was not escaped exactly once:\n%s", svg.String())
+	}
+	var html bytes.Buffer
+	if err := chart.WriteHTML(&html, HTMLOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(html.String(), "<script") || !strings.Contains(html.String(), "Content-Security-Policy") {
+		t.Fatalf("HTML contains executable chart text or lacks CSP:\n%s", html.String())
+	}
+	var second bytes.Buffer
+	if err := chart.WriteSVG(&second, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(svg.Bytes(), second.Bytes()) {
+		t.Fatal("rendering the same chart twice produced different SVG output")
+	}
+}
+
+func TestInlineChartLabelsRejectControlCharacters(t *testing.T) {
+	seriesLabel, _ := Demo("line")
+	seriesLabel.Series[0].Label = "Revenue\x1b[31m"
+	if _, err := New(seriesLabel); err == nil || !strings.Contains(err.Error(), "control character") {
+		t.Fatalf("series label control error = %v", err)
+	}
+
+	axisLabel, _ := Demo("line")
+	axisLabel.Data[0][axisLabel.XAxis.DataKey] = "Jan\x1b[31m"
+	if _, err := New(axisLabel); err == nil || !strings.Contains(err.Error(), "control character") {
+		t.Fatalf("axis label control error = %v", err)
+	}
+}
+
+func TestAnnotationsValidateAndResolveDeterministically(t *testing.T) {
+	spec, err := Demo("line")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := 1
+	spec.Annotations = []Annotation{{Text: "Growth accelerated", DataIndex: &index, Series: "desktop"}}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := chart.ResolvedSpec().Annotations[0].Position; got != AnnotationBottom {
+		t.Fatalf("resolved annotation position = %q, want %q", got, AnnotationBottom)
+	}
+	index = 99
+	if got := *chart.Spec().Annotations[0].DataIndex; got != 1 {
+		t.Fatalf("chart retained caller-owned annotation pointer: dataIndex = %d", got)
+	}
+
+	tests := []struct {
+		name       string
+		annotation Annotation
+		contains   string
+	}{
+		{name: "empty", annotation: Annotation{}, contains: "must not be empty"},
+		{name: "index", annotation: Annotation{Text: "note", DataIndex: intPointer(99)}, contains: "dataIndex"},
+		{name: "series", annotation: Annotation{Text: "note", Series: "missing"}, contains: "unknown series"},
+		{name: "position", annotation: Annotation{Text: "note", Position: "middle"}, contains: "position"},
+		{name: "color", annotation: Annotation{Text: "note", Color: "red"}, contains: "#RRGGBB"},
+		{name: "control", annotation: Annotation{Text: "note\x1b[31m"}, contains: "control"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			invalid, _ := Demo("line")
+			invalid.Annotations = []Annotation{test.annotation}
+			if _, err := New(invalid); err == nil || !strings.Contains(err.Error(), test.contains) {
+				t.Fatalf("annotation error = %v, want containing %q", err, test.contains)
+			}
+		})
+	}
+
+	histogram, _ := Demo("histogram")
+	histogram.Annotations = []Annotation{{Text: "note", DataIndex: intPointer(0)}}
+	if _, err := New(histogram); err == nil || !strings.Contains(err.Error(), "histogram bins") {
+		t.Fatalf("histogram annotation error = %v", err)
+	}
+}
+
+func TestAnnotationsRenderWithoutTerminalOverflow(t *testing.T) {
+	spec, _ := Demo("grouped-bar")
+	index := 5
+	spec.Title = "Global Infrastructure & Energy Transition — Financing Overview"
+	spec.Description = "A long investment committee description that must wrap cleanly instead of colliding with the plot or legend."
+	spec.Annotations = []Annotation{
+		{Text: "Mobile visitors accelerated materially during the latest reporting period — 投資委員会向け注記.", Position: AnnotationTop, DataIndex: &index, Series: "mobile"},
+		{Text: "Illustrative analysis only; figures may not sum due to rounding.", Position: AnnotationBottom},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := chart.Terminal(TerminalOptions{Width: 64, Height: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(terminal)
+	for index, line := range strings.Split(plain, "\n") {
+		if width := ansi.StringWidth(line); width > 64 {
+			t.Fatalf("terminal line %d is %d cells wide:\n%s", index+1, width, terminal)
+		}
+	}
+	for _, expected := range []string{"Jun · Mobile", "Illustrative analysis"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("terminal annotation is missing %q:\n%s", expected, terminal)
+		}
+	}
+	var svg bytes.Buffer
+	if err := chart.WriteSVG(&svg, ImageOptions{Width: 800, Height: 600}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(svg.String(), "Mobile visitors accelerated") || !strings.Contains(svg.String(), "Illustrative analysis") {
+		t.Fatalf("SVG annotations are missing:\n%s", svg.String())
+	}
+}
+
+func TestGraphicalTextLayoutReservesSpaceInRasterAndVectorOutputs(t *testing.T) {
+	spec, _ := Demo("annotated-bar")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	theme, err := chart.theme()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, format := range []string{charts.ChartOutputPNG, charts.ChartOutputSVG} {
+		painter := charts.NewPainter(charts.PainterOptions{OutputFormat: format, Width: 1200, Height: 720, Theme: theme})
+		layout, err := chart.graphicalTextLayout(painter, theme, 1200, 720)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if layout.topHeight < 60 || layout.bottomHeight < 40 {
+			t.Fatalf("%s text layout did not reserve space: top=%d bottom=%d", format, layout.topHeight, layout.bottomHeight)
+		}
+	}
+}
+
+func TestPNGRenderingDoesNotMutateChartText(t *testing.T) {
+	spec, _ := Demo("annotated-bar")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := chart.Spec()
+	var pngOutput bytes.Buffer
+	if err := chart.WritePNG(&pngOutput, ImageOptions{Width: 1200, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	image, err := png.Decode(bytes.NewReader(pngOutput.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pixels := nonWhitePixels(image, 0, 0, 500, 100); pixels < 100 {
+		t.Fatalf("PNG header contains only %d non-white pixels; chart text was not rendered", pixels)
+	}
+	if pixels := nonWhitePixels(image, 0, 650, 1000, 720); pixels < 100 {
+		t.Fatalf("PNG footer contains only %d non-white pixels; annotations were not rendered", pixels)
+	}
+	after := chart.Spec()
+	if after.Title != before.Title || after.Description != before.Description || after.Footer != before.Footer || len(after.Annotations) != len(before.Annotations) {
+		t.Fatalf("PNG rendering mutated chart text: before=%+v after=%+v", before, after)
+	}
+	var svg bytes.Buffer
+	if err := chart.WriteSVG(&svg, ImageOptions{Width: 1200, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(svg.String(), "Illustrative Operating Performance") {
+		t.Fatal("chart text disappeared after PNG rendering")
+	}
+}
+
+func TestComboAnnotationsUseOpaqueReservedBands(t *testing.T) {
+	spec, _ := Demo("combo")
+	spec.Annotations = []Annotation{{Text: "Revenue remained ahead of the underwriting case."}}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WritePNG(&output, ImageOptions{Width: 1200, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	image, err := png.Decode(bytes.NewReader(output.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, point := range [][2]int{{0, 0}, {1199, 0}, {0, 719}, {1199, 719}} {
+		_, _, _, alpha := image.At(point[0], point[1]).RGBA()
+		if alpha != 0xffff {
+			t.Fatalf("combo frame pixel %v has alpha %#x, want opaque", point, alpha)
+		}
+	}
+}
+
+func TestDenseTextFailsClearlyInsteadOfCollapsingPlot(t *testing.T) {
+	spec, _ := Demo("line")
+	for index := 0; index < maxAnnotations; index++ {
+		spec.Annotations = append(spec.Annotations, Annotation{Text: strings.Repeat("Long investment committee annotation ", 5)})
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err = chart.WritePNG(&output, ImageOptions{Width: 320, Height: 240})
+	if err == nil || !strings.Contains(err.Error(), "too short for chart text") {
+		t.Fatalf("dense text error = %v", err)
+	}
+}
+
+func TestChartLabelsCannotInjectEscapeSequences(t *testing.T) {
+	spec, _ := Demo("line")
+	spec.Data[0]["month"] = "Jan\x1b]52;c;payload\a"
+	if _, err := New(spec); err == nil || !strings.Contains(err.Error(), "control character") {
+		t.Fatalf("chart label control error = %v", err)
+	}
+}
+
+func nonWhitePixels(image interface{ At(int, int) color.Color }, left, top, right, bottom int) int {
+	count := 0
+	for y := top; y < bottom; y++ {
+		for x := left; x < right; x++ {
+			red, green, blue, alpha := image.At(x, y).RGBA()
+			if alpha > 0 && (red < 0xf000 || green < 0xf000 || blue < 0xf000) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func TestRadarMissingValuesDoNotDestroyScale(t *testing.T) {
+	spec, _ := Demo("radar")
+	spec.Max = 0
+	spec.Data[0]["desktop"] = nil
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxima := chart.radarMaxima()
+	if maxima[0] != 91 {
+		t.Fatalf("first radar maximum = %v, want 91", maxima[0])
+	}
+	var svg bytes.Buffer
+	if err := chart.WriteSVG(&svg, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRadarRejectsValuesAboveExplicitMaximum(t *testing.T) {
+	spec, _ := Demo("radar")
+	spec.Max = 50
+	if _, err := New(spec); err == nil || !strings.Contains(err.Error(), "exceeds radar max") {
+		t.Fatalf("radar max error = %v", err)
+	}
+}
+
+func intPointer(value int) *int {
+	return &value
+}
+
+func TestGraphicalDisplayOptionsChangeOutput(t *testing.T) {
+	render := func(t *testing.T, spec Spec) string {
+		t.Helper()
+		chart, err := New(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+			t.Fatal(err)
+		}
+		return output.String()
+	}
+
+	combo, err := Demo("combo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutLabels := render(t, combo)
+	combo.Labels = &DisplaySpec{Show: true}
+	if withLabels := render(t, combo); withLabels == withoutLabels {
+		t.Fatal("combo value labels did not change SVG output")
+	}
+
+	heatmap, err := Demo("heatmap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	withAxes := render(t, heatmap)
+	heatmap.Axes = &DisplaySpec{Show: false}
+	if withoutAxes := render(t, heatmap); withoutAxes == withAxes {
+		t.Fatal("hidden heatmap axes did not change SVG output")
+	}
+
+	line, err := Demo("line")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line.Footer = "first footer"
+	firstFooter := render(t, line)
+	line.Footer = "second footer"
+	secondFooter := render(t, line)
+	if firstFooter == secondFooter || !strings.Contains(firstFooter, "first footer") {
+		t.Fatal("footer was not rendered into SVG output")
+	}
+}
+
+func TestScatterUsesNumericXValues(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Scatter,
+		XAxis:   AxisSpec{DataKey: "x", Kind: "number"},
+		Series:  []SeriesSpec{{DataKey: "y"}},
+		Data: []Row{
+			{"x": 0, "y": 0},
+			{"x": 10, "y": 50},
+			{"x": 100, "y": 100},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var svg bytes.Buffer
+	if err := chart.WriteSVG(&svg, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	matches := regexp.MustCompile(`<circle cx="(\d+)"`).FindAllStringSubmatch(svg.String(), -1)
+	if len(matches) != 3 {
+		t.Fatalf("scatter SVG circles = %d, want 3\n%s", len(matches), svg.String())
+	}
+	positions := make([]int, len(matches))
+	for index, match := range matches {
+		positions[index], err = strconv.Atoi(match[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	firstGap := positions[1] - positions[0]
+	secondGap := positions[2] - positions[1]
+	if firstGap <= 0 || secondGap < firstGap*5 {
+		t.Fatalf("scatter x positions are not proportional: %v", positions)
+	}
+
+	terminal, err := chart.Terminal(TerminalOptions{Width: 84, Height: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(ansi.Strip(terminal), "●") != 3 {
+		t.Fatalf("terminal scatter did not render three independent points:\n%s", terminal)
+	}
+}
+
+func TestNormalizedLayoutRejectsInvalidRows(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		Layout:  Normalized,
+		XAxis:   AxisSpec{DataKey: "x"},
+		Series:  []SeriesSpec{{DataKey: "a"}, {DataKey: "b"}},
+		Data:    []Row{{"x": "mixed", "a": 2, "b": -1}},
+	}
+	if _, err := New(spec); err == nil || !strings.Contains(err.Error(), "non-negative") {
+		t.Fatalf("mixed-sign normalized row error = %v", err)
+	}
+	spec.Data = []Row{{"x": "zero", "a": 0, "b": 0}}
+	if _, err := New(spec); err == nil || !strings.Contains(err.Error(), "no positive values") {
+		t.Fatalf("zero-total normalized row error = %v", err)
+	}
+	spec.Data = []Row{{"x": "missing", "a": nil, "b": nil}}
+	if _, err := New(spec); err != nil {
+		t.Fatalf("all-missing normalized row should remain a gap: %v", err)
+	}
+}
+
+func TestHistogramRejectsIncompleteXAxis(t *testing.T) {
+	spec, err := Demo("histogram")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec.XAxis = AxisSpec{Kind: "number"}
+	if _, err := New(spec); err == nil || !strings.Contains(err.Error(), "requires xAxis.dataKey") {
+		t.Fatalf("incomplete histogram xAxis error = %v", err)
+	}
+}
+
 func TestSignedAndMissingCartesianValues(t *testing.T) {
 	spec := Spec{
 		Version: SpecVersion,
@@ -64,6 +562,166 @@ func TestSignedAndMissingCartesianValues(t *testing.T) {
 	spec.Type = Pie
 	if _, err := New(spec); err == nil || !strings.Contains(err.Error(), "non-negative") {
 		t.Fatalf("pie negative error = %v", err)
+	}
+}
+
+func TestSignedBarsUseDivergingNativeAxis(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		XAxis:   AxisSpec{DataKey: "period"},
+		Series:  []SeriesSpec{{DataKey: "variance", Label: "Variance"}},
+		Data: []Row{
+			{"period": "Q1", "variance": -18},
+			{"period": "Q2", "variance": 12},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 64, Height: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "-18") || !strings.Contains(plain, "│") || !strings.Contains(plain, "Q2 · Variance") {
+		t.Fatalf("signed bar chart is not a diverging view:\n%s", output)
+	}
+}
+
+func TestTerminalSeriesRemainDistinctWithoutColor(t *testing.T) {
+	spec, _ := Demo("line")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 84, Height: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "●") || !strings.Contains(plain, "◆") {
+		t.Fatalf("series are not shape-distinct without color:\n%s", output)
+	}
+}
+
+func TestTerminalColorResolvesChartPaletteTokens(t *testing.T) {
+	r, g, b, a := terminalColor("var(--chart-2)").RGBA()
+	if r != 0x6060 || g != 0xA5A5 || b != 0xFAFA || a != 0xFFFF {
+		t.Fatalf("terminal palette color = #%04X%04X%04X alpha %04X", r, g, b, a)
+	}
+}
+
+func TestMissingValueDoesNotBreakAnyDemoRenderer(t *testing.T) {
+	for _, name := range DemoNames() {
+		t.Run(name, func(t *testing.T) {
+			spec, err := Demo(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := spec.Series[0].DataKey
+			spec.Data[0][key] = nil
+			chart, err := New(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := chart.Terminal(TerminalOptions{Width: 96, Height: 14}); err != nil {
+				t.Fatalf("terminal: %v", err)
+			}
+			var svg bytes.Buffer
+			if err := chart.WriteSVG(&svg, ImageOptions{Width: 900, Height: 600}); err != nil {
+				t.Fatalf("SVG: %v", err)
+			}
+		})
+	}
+}
+
+func TestAllMissingSeriesRenderAsEmptyData(t *testing.T) {
+	for _, name := range []string{"line", "pie", "donut", "heatmap", "radar", "funnel"} {
+		t.Run(name, func(t *testing.T) {
+			spec, _ := Demo(name)
+			for rowIndex := range spec.Data {
+				for _, series := range spec.Series {
+					spec.Data[rowIndex][series.DataKey] = nil
+				}
+			}
+			chart, err := New(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := chart.Terminal(TerminalOptions{Width: 96, Height: 14}); err != nil {
+				t.Fatalf("terminal: %v", err)
+			}
+			var svg bytes.Buffer
+			if err := chart.WriteSVG(&svg, ImageOptions{Width: 900, Height: 600}); err != nil {
+				t.Fatalf("SVG: %v", err)
+			}
+		})
+	}
+}
+
+func TestTerminalEdgeDimensionsNeverOverflow(t *testing.T) {
+	for _, name := range DemoNames() {
+		for _, width := range []int{MinTerminalWidth, 40, 64, 120, 240} {
+			for _, height := range []int{MinTerminalHeight, 10, 14, 30} {
+				t.Run(fmt.Sprintf("%s-%dx%d", name, width, height), func(t *testing.T) {
+					spec, _ := Demo(name)
+					chart, err := New(spec)
+					if err != nil {
+						t.Fatal(err)
+					}
+					output, err := chart.Terminal(TerminalOptions{Width: width, Height: height})
+					if err != nil {
+						return
+					}
+					for lineIndex, line := range strings.Split(output, "\n") {
+						if lineWidth := ansi.StringWidth(line); lineWidth > width {
+							t.Fatalf("line %d is %d cells wide, want at most %d:\n%s", lineIndex+1, lineWidth, width, output)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestExtremeValuesFailClearly(t *testing.T) {
+	spec, _ := Demo("line")
+	spec.Data[0]["desktop"] = math.MaxFloat64
+	if _, err := New(spec); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("maximum float error = %v", err)
+	}
+
+	spec, _ = Demo("normalized-bar")
+	spec.Data[0]["desktop"] = 1e308
+	spec.Data[0]["mobile"] = 1e308
+	if _, err := New(spec); err == nil || !strings.Contains(err.Error(), "total is too large") {
+		t.Fatalf("overflowing normalized total error = %v", err)
+	}
+	if got := formatValue(2_500_000_000); got != "2.5bn" {
+		t.Fatalf("billion formatting = %q", got)
+	}
+	if got := formatValue(1_250_000_000_000); got != "1.2tn" {
+		t.Fatalf("trillion formatting = %q", got)
+	}
+}
+
+func TestNarrowHeatmapFailsInsteadOfDroppingSeries(t *testing.T) {
+	spec, _ := Demo("heatmap")
+	for index := 0; index < 20; index++ {
+		key := fmt.Sprintf("extra_%d", index)
+		spec.Series = append(spec.Series, SeriesSpec{DataKey: key})
+		for rowIndex := range spec.Data {
+			spec.Data[rowIndex][key] = index
+		}
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chart.Terminal(TerminalOptions{Width: 40, Height: 14}); err == nil || !strings.Contains(err.Error(), "too narrow") {
+		t.Fatalf("narrow heatmap error = %v", err)
 	}
 }
 
@@ -165,6 +823,106 @@ func TestHorizontalGroupedBarsContainBars(t *testing.T) {
 	}
 	if !strings.Contains(ansi.Strip(output), "Jan") {
 		t.Fatalf("horizontal chart has no category labels:\n%s", output)
+	}
+}
+
+func TestPieTerminalUsesProportionalBlocks(t *testing.T) {
+	spec, _ := Demo("pie")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 64, Height: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "█") || !strings.Contains(plain, "%") || !strings.Contains(plain, "Chrome") {
+		t.Fatalf("pie chart is not a proportional block chart:\n%s", output)
+	}
+}
+
+func TestHeatmapTerminalUsesDensityCells(t *testing.T) {
+	spec, _ := Demo("heatmap")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 64, Height: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.ContainsAny(plain, "░▒▓█") || !strings.Contains(plain, "Morning") || !strings.Contains(plain, "Mon") {
+		t.Fatalf("heatmap is not a native density grid:\n%s", output)
+	}
+}
+
+func TestRadarTerminalUsesComparableBars(t *testing.T) {
+	spec, _ := Demo("radar")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 64, Height: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.ContainsAny(plain, "█▉▊▋▌▍▎▏") || !strings.Contains(plain, "Desktop") || !strings.Contains(plain, "Reach") {
+		t.Fatalf("radar chart is not a native comparative bar view:\n%s", output)
+	}
+}
+
+func TestFunnelTerminalUsesCenteredBlocks(t *testing.T) {
+	spec, _ := Demo("funnel")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 64, Height: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.ContainsAny(plain, "█▉▊▋▌▍▎▏") || !strings.Contains(plain, "Visitors") || !strings.Contains(plain, "Customers") {
+		t.Fatalf("funnel chart is not a native centered block view:\n%s", output)
+	}
+}
+
+func TestNativeTerminalLayoutsRespectWidth(t *testing.T) {
+	const width = 64
+	for _, name := range []string{"pie", "donut", "heatmap", "radar", "funnel"} {
+		t.Run(name, func(t *testing.T) {
+			spec, err := Demo(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			chart, err := New(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := chart.Terminal(TerminalOptions{Width: width, Height: 10})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for index, line := range strings.Split(output, "\n") {
+				if lineWidth := ansi.StringWidth(line); lineWidth > width {
+					t.Fatalf("line %d is %d cells wide, want at most %d:\n%s", index+1, lineWidth, width, output)
+				}
+			}
+		})
+	}
+}
+
+func TestRowBasedNativeLayoutsDoNotSilentlyOmitData(t *testing.T) {
+	spec, _ := Demo("radar")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chart.Terminal(TerminalOptions{Width: 64, Height: 8}); err == nil || !strings.Contains(err.Error(), "10 radar rows") {
+		t.Fatalf("short radar error = %v", err)
 	}
 }
 

@@ -2,8 +2,11 @@ package chartmux
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/NimbleMarkets/ntcharts/v2/barchart"
@@ -53,17 +56,32 @@ func (chart *Chart) Terminal(options TerminalOptions) (string, error) {
 		return "", err
 	}
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(chart.series[0].spec.Color)).Render(chart.spec.Title)
-	parts := []string{ansi.Truncate(title, options.Width, "…")}
-	if chart.spec.Description != "" {
-		parts = append(parts, ansi.Truncate(lipgloss.NewStyle().Foreground(lipgloss.Color("#71717A")).Render(chart.spec.Description), options.Width, "…"))
+	var parts []string
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(terminalColor(chart.series[0].spec.Color))
+	mutedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#71717A"))
+	parts = append(parts, terminalStyledLines(chart.spec.Title, options.Width, titleStyle)...)
+	parts = append(parts, terminalStyledLines(chart.spec.Description, options.Width, mutedStyle)...)
+	for _, annotation := range chart.spec.Annotations {
+		if annotationPosition(annotation) == AnnotationTop {
+			parts = append(parts, chart.terminalAnnotationLines(annotation, options.Width)...)
+		}
 	}
-	parts = append(parts, "", plot)
+	if len(parts) > 0 {
+		parts = append(parts, "")
+	}
+	parts = append(parts, plot)
 	if displayValue(chart.spec.Legend, len(chart.series) > 1) {
 		parts = append(parts, "", chart.terminalLegend(options.Width))
 	}
+	for _, annotation := range chart.spec.Annotations {
+		if annotationPosition(annotation) == AnnotationBottom {
+			parts = append(parts, "")
+			parts = append(parts, chart.terminalAnnotationLines(annotation, options.Width)...)
+		}
+	}
 	if chart.spec.Footer != "" {
-		parts = append(parts, "", ansi.Truncate(lipgloss.NewStyle().Foreground(lipgloss.Color("#71717A")).Render(chart.spec.Footer), options.Width, "…"))
+		parts = append(parts, "")
+		parts = append(parts, terminalStyledLines(chart.spec.Footer, options.Width, mutedStyle)...)
 	}
 	return strings.Join(parts, "\n"), nil
 }
@@ -76,15 +94,22 @@ func (chart *Chart) terminalPlot(width, height int) (string, error) {
 		return chart.terminalCartesian(width, height, nil, false), nil
 	case Combo:
 		return chart.terminalCombo(width, height), nil
-	case Pie, Donut, Heatmap, Radar, Funnel:
-		return chart.terminalTable(width), nil
+	case Pie, Donut:
+		return chart.terminalProportions(width, height)
+	case Heatmap:
+		return chart.terminalHeatmap(width, height)
+	case Radar:
+		return chart.terminalRadar(width, height)
+	case Funnel:
+		return chart.terminalFunnel(width, height)
 	default:
 		return "", fmt.Errorf("terminal output does not support %q", chart.spec.Type)
 	}
 }
 
 func (chart *Chart) terminalCartesian(width, height int, include map[int]bool, zeroBaseline bool) string {
-	minimum, maximum := chart.valueRange(include)
+	displayed := chart.terminalCartesianValues()
+	minimum, maximum := valueRangeForSeries(displayed, include)
 	if chart.spec.Type == Area || zeroBaseline {
 		minimum = math.Min(0, minimum)
 		maximum = math.Max(0, maximum)
@@ -96,7 +121,19 @@ func (chart *Chart) terminalCartesian(width, height int, include map[int]bool, z
 	padding := (maximum - minimum) * 0.08
 	minimum -= padding
 	maximum += padding
+	minX := 0.0
 	maxX := float64(max(1, len(chart.labels)-1))
+	if chart.spec.Type == Scatter && len(chart.xValues) > 0 {
+		minX, maxX = chart.xValues[0], chart.xValues[0]
+		for _, value := range chart.xValues[1:] {
+			minX = math.Min(minX, value)
+			maxX = math.Max(maxX, value)
+		}
+		if minX == maxX {
+			minX--
+			maxX++
+		}
+	}
 	xStep := max(1, (width-8)/min(6, max(1, len(chart.labels))))
 	yStep := 2
 	if !displayValue(chart.spec.Axes, true) {
@@ -108,15 +145,18 @@ func (chart *Chart) terminalCartesian(width, height int, include map[int]bool, z
 	model := linechart.New(
 		width,
 		height,
-		0,
+		minX,
 		maxX,
 		minimum,
 		maximum,
 		linechart.WithXYSteps(xStep, yStep),
 		linechart.WithStyles(axisStyle, labelStyle, lipgloss.NewStyle()),
 		linechart.WithXLabelFormatter(func(_ int, value float64) string {
+			if chart.spec.Type == Scatter {
+				return formatValue(value)
+			}
 			index := min(len(chart.labels)-1, max(0, int(math.Round(value))))
-			return chart.labels[index]
+			return terminalSafeText(chart.labels[index])
 		}),
 		linechart.WithYLabelFormatter(func(_ int, value float64) string {
 			return formatValue(value)
@@ -129,28 +169,36 @@ func (chart *Chart) terminalCartesian(width, height int, include map[int]bool, z
 		if include != nil && !include[seriesIndex] {
 			continue
 		}
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color(series.spec.Color))
+		style := lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color))
 		lineStyle := runes.ThinLineStyle
 		if chart.spec.Curve == Smooth {
 			lineStyle = runes.ArcLineStyle
 		}
-		for pointIndex := 1; pointIndex < len(series.values); pointIndex++ {
-			left := series.values[pointIndex-1]
-			right := series.values[pointIndex]
-			if left == math.MaxFloat64 || right == math.MaxFloat64 {
-				continue
+		values := displayed[seriesIndex]
+		if chart.spec.Type != Scatter {
+			for pointIndex := 1; pointIndex < len(values); pointIndex++ {
+				left := values[pointIndex-1]
+				right := values[pointIndex]
+				if isMissing(left) || isMissing(right) {
+					continue
+				}
+				model.DrawLineWithStyle(
+					canvas.Float64Point{X: float64(pointIndex - 1), Y: left},
+					canvas.Float64Point{X: float64(pointIndex), Y: right},
+					lineStyle,
+					style,
+				)
 			}
-			model.DrawLineWithStyle(
-				canvas.Float64Point{X: float64(pointIndex - 1), Y: left},
-				canvas.Float64Point{X: float64(pointIndex), Y: right},
-				lineStyle,
-				style,
-			)
+			for pointIndex, value := range values {
+				if !isMissing(value) {
+					model.DrawRuneWithStyle(canvas.Float64Point{X: float64(pointIndex), Y: value}, terminalMarker(seriesIndex), style)
+				}
+			}
 		}
 		if chart.spec.Type == Scatter {
-			for pointIndex, value := range series.values {
-				if value != math.MaxFloat64 {
-					model.DrawRuneWithStyle(canvas.Float64Point{X: float64(pointIndex), Y: value}, '●', style)
+			for pointIndex, value := range values {
+				if !isMissing(value) {
+					model.DrawRuneWithStyle(canvas.Float64Point{X: chart.xValues[pointIndex], Y: value}, terminalMarker(seriesIndex), style)
 				}
 			}
 		}
@@ -192,7 +240,7 @@ func (chart *Chart) terminalCombo(width, height int) string {
 		linechart.WithStyles(axisStyle, labelStyle, lipgloss.NewStyle()),
 		linechart.WithXLabelFormatter(func(_ int, value float64) string {
 			index := min(len(chart.labels)-1, max(0, int(math.Round(value))))
-			return chart.labels[index]
+			return terminalSafeText(chart.labels[index])
 		}),
 		linechart.WithYLabelFormatter(func(_ int, value float64) string {
 			return formatValue(value)
@@ -205,9 +253,9 @@ func (chart *Chart) terminalCombo(width, height int) string {
 		if series.spec.Mark != MarkBar {
 			continue
 		}
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color(series.spec.Color))
+		style := lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color))
 		for pointIndex, value := range series.values {
-			if value == math.MaxFloat64 {
+			if isMissing(value) {
 				continue
 			}
 			model.DrawRuneLineWithStyle(
@@ -218,15 +266,15 @@ func (chart *Chart) terminalCombo(width, height int) string {
 			)
 		}
 	}
-	for _, series := range chart.series {
+	for seriesIndex, series := range chart.series {
 		if series.spec.Mark != MarkLine {
 			continue
 		}
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color(series.spec.Color))
+		style := lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color))
 		for pointIndex := 1; pointIndex < len(series.values); pointIndex++ {
 			left := series.values[pointIndex-1]
 			right := series.values[pointIndex]
-			if left == math.MaxFloat64 || right == math.MaxFloat64 {
+			if isMissing(left) || isMissing(right) {
 				continue
 			}
 			model.DrawLineWithStyle(
@@ -236,6 +284,11 @@ func (chart *Chart) terminalCombo(width, height int) string {
 				style,
 			)
 		}
+		for pointIndex, value := range series.values {
+			if !isMissing(value) {
+				model.DrawRuneWithStyle(canvas.Float64Point{X: float64(pointIndex), Y: value}, terminalMarker(seriesIndex), style)
+			}
+		}
 	}
 	return model.Canvas.View()
 }
@@ -243,8 +296,8 @@ func (chart *Chart) terminalCombo(width, height int) string {
 func (chart *Chart) terminalBars(width, height int) (string, error) {
 	for _, series := range chart.series {
 		for _, value := range series.values {
-			if value != math.MaxFloat64 && value < 0 {
-				return "", fmt.Errorf("signed bars need terminal graphics; use --watch or export SVG, PNG, or HTML")
+			if !isMissing(value) && value < 0 {
+				return chart.terminalDivergingBars(width, height)
 			}
 		}
 	}
@@ -260,24 +313,24 @@ func (chart *Chart) terminalBars(width, height int) (string, error) {
 			values := make([]barchart.BarValue, 0, len(chart.series))
 			for _, series := range chart.series {
 				value := series.values[pointIndex]
-				if value == math.MaxFloat64 {
+				if isMissing(value) {
 					value = 0
 				}
-				values = append(values, barchart.BarValue{Name: series.spec.Label, Value: value, Style: lipgloss.NewStyle().Foreground(lipgloss.Color(series.spec.Color))})
+				values = append(values, barchart.BarValue{Name: series.spec.Label, Value: value, Style: lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color))})
 			}
-			data = append(data, barchart.BarData{Label: label, Values: values})
+			data = append(data, barchart.BarData{Label: terminalSafeText(label), Values: values})
 			continue
 		}
 		for seriesIndex, series := range chart.series {
 			value := series.values[pointIndex]
-			if value == math.MaxFloat64 {
+			if isMissing(value) {
 				value = 0
 			}
 			barLabel := ""
 			if seriesIndex == 0 {
-				barLabel = label
+				barLabel = terminalSafeText(label)
 			}
-			data = append(data, barchart.BarData{Label: barLabel, Values: []barchart.BarValue{{Name: series.spec.Label, Value: value, Style: lipgloss.NewStyle().Foreground(lipgloss.Color(series.spec.Color))}}})
+			data = append(data, barchart.BarData{Label: barLabel, Values: []barchart.BarValue{{Name: series.spec.Label, Value: value, Style: lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color))}}})
 		}
 	}
 	model.PushAll(data)
@@ -289,29 +342,11 @@ func (chart *Chart) terminalBars(width, height int) (string, error) {
 	return model.View(), nil
 }
 
-func (chart *Chart) terminalTable(width int) string {
-	var rows []string
-	for pointIndex, label := range chart.labels {
-		values := make([]string, 0, len(chart.series))
-		for _, series := range chart.series {
-			value := series.values[pointIndex]
-			if value == math.MaxFloat64 {
-				values = append(values, "–")
-			} else {
-				values = append(values, formatValue(value))
-			}
-		}
-		line := fmt.Sprintf("%-16s %s", ansi.Truncate(label, 16, "…"), strings.Join(values, "  "))
-		rows = append(rows, ansi.Truncate(line, width, "…"))
-	}
-	return strings.Join(rows, "\n")
-}
-
 func (chart *Chart) terminalLegend(width int) string {
 	items := make([]string, len(chart.series))
 	for index, series := range chart.series {
-		marker := lipgloss.NewStyle().Foreground(lipgloss.Color(series.spec.Color)).Render("━━")
-		items[index] = marker + " " + series.spec.Label
+		marker := lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color)).Render(string(terminalMarker(index)) + "━")
+		items[index] = marker + " " + terminalSafeText(series.spec.Label)
 	}
 	return ansi.Truncate(strings.Join(items, "   "), width, "…")
 }
@@ -324,7 +359,7 @@ func (chart *Chart) valueRange(include map[int]bool) (float64, float64) {
 			continue
 		}
 		for _, value := range series.values {
-			if value == math.MaxFloat64 {
+			if isMissing(value) {
 				continue
 			}
 			minimum = math.Min(minimum, value)
@@ -337,9 +372,149 @@ func (chart *Chart) valueRange(include map[int]bool) (float64, float64) {
 	return minimum, maximum
 }
 
+func (chart *Chart) terminalCartesianValues() [][]float64 {
+	values := chart.seriesValues()
+	if chart.spec.Type != Area || (chart.spec.Layout != Stacked && chart.spec.Layout != Normalized) {
+		return values
+	}
+	for pointIndex := range chart.labels {
+		total := 0.0
+		for seriesIndex := range values {
+			if isMissing(values[seriesIndex][pointIndex]) {
+				continue
+			}
+			total += values[seriesIndex][pointIndex]
+			values[seriesIndex][pointIndex] = total
+		}
+	}
+	return values
+}
+
+func valueRangeForSeries(values [][]float64, include map[int]bool) (float64, float64) {
+	minimum := math.Inf(1)
+	maximum := math.Inf(-1)
+	for seriesIndex, series := range values {
+		if include != nil && !include[seriesIndex] {
+			continue
+		}
+		for _, value := range series {
+			if isMissing(value) {
+				continue
+			}
+			minimum = math.Min(minimum, value)
+			maximum = math.Max(maximum, value)
+		}
+	}
+	if math.IsInf(minimum, 1) {
+		return 0, 1
+	}
+	return minimum, maximum
+}
+
+var terminalMarkers = [...]rune{'●', '◆', '■', '▲', '✦', '✚'}
+
+func terminalMarker(index int) rune {
+	return terminalMarkers[index%len(terminalMarkers)]
+}
+
+// terminalColor resolves schema palette tokens before they reach Lip Gloss.
+// Lip Gloss accepts concrete terminal colors, not CSS var(--chart-N) values.
+func terminalColor(value string) color.Color {
+	color, err := colorHex(value)
+	if err != nil {
+		// Chart construction validates colors, so this is only a defensive
+		// fallback for future internal call sites.
+		return lipgloss.Color("#71717A")
+	}
+	return lipgloss.Color(fmt.Sprintf("#%02X%02X%02X", color.R, color.G, color.B))
+}
+
+func terminalSafeText(value string) string {
+	var safe strings.Builder
+	for index := 0; index < len(value); {
+		if value[index] == 0x1b {
+			index = skipTerminalEscape(value, index)
+			continue
+		}
+		char, size := utf8.DecodeRuneInString(value[index:])
+		if char == utf8.RuneError && size == 1 {
+			index++
+			continue
+		}
+		index += size
+		if char == '\n' || char == '\r' || char == '\t' {
+			safe.WriteByte(' ')
+			continue
+		}
+		if unicode.IsControl(char) {
+			continue
+		}
+		safe.WriteRune(char)
+	}
+	return safe.String()
+}
+
+func skipTerminalEscape(value string, start int) int {
+	index := start + 1
+	if index >= len(value) {
+		return index
+	}
+	switch value[index] {
+	case '[':
+		index++
+		for index < len(value) {
+			char := value[index]
+			index++
+			if char >= 0x40 && char <= 0x7e {
+				break
+			}
+		}
+	case ']', 'P', 'X', '^', '_':
+		index++
+		for index < len(value) {
+			if value[index] == 0x07 {
+				return index + 1
+			}
+			if value[index] == 0x1b && index+1 < len(value) && value[index+1] == '\\' {
+				return index + 2
+			}
+			index++
+		}
+	default:
+		index++
+	}
+	return index
+}
+
+func terminalStyledLines(value string, width int, style lipgloss.Style) []string {
+	value = strings.TrimSpace(terminalSafeText(value))
+	if value == "" {
+		return nil
+	}
+	wrapped := ansi.Hardwrap(ansi.Wordwrap(value, width, ""), width, false)
+	lines := strings.Split(wrapped, "\n")
+	for index := range lines {
+		lines[index] = style.Render(lines[index])
+	}
+	return lines
+}
+
+func (chart *Chart) terminalAnnotationLines(annotation Annotation, width int) []string {
+	color := annotation.Color
+	if color == "" {
+		color = "#71717A"
+	}
+	style := lipgloss.NewStyle().Foreground(terminalColor(color))
+	return terminalStyledLines("◆ "+chart.annotationText(annotation), width, style)
+}
+
 func formatValue(value float64) string {
 	abs := math.Abs(value)
 	switch {
+	case abs >= 1_000_000_000_000:
+		return fmt.Sprintf("%.1ftn", value/1_000_000_000_000)
+	case abs >= 1_000_000_000:
+		return fmt.Sprintf("%.1fbn", value/1_000_000_000)
 	case abs >= 1_000_000:
 		return fmt.Sprintf("%.1fm", value/1_000_000)
 	case abs >= 1_000:
