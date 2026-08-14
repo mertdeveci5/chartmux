@@ -113,10 +113,6 @@ func (chart *Chart) terminalPlot(width, height int, state terminalRenderState) (
 	}
 }
 
-func (chart *Chart) terminalBars(width, height int) (string, error) {
-	return chart.terminalBarsWithState(width, height, terminalRenderState{})
-}
-
 func (chart *Chart) terminalLegend(width int) string {
 	items := make([]string, len(chart.series))
 	for index, series := range chart.series {
