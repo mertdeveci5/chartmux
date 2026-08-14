@@ -79,6 +79,71 @@ func TestWatchModelHelpAndClipboardActions(t *testing.T) {
 	}
 }
 
+func TestWatchModelInspectsPointsAndSeriesWithArrowKeys(t *testing.T) {
+	model := testWatchModel(t)
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 28})
+	model = updated.(watchModel)
+
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	model = updated.(watchModel)
+	if !model.inspect || model.focusIndex != 1 || model.focusSeries != 0 {
+		t.Fatalf("right arrow did not inspect the next category: %+v", model)
+	}
+	if content := model.View().Content; !strings.Contains(content, "Feb") || !strings.Contains(content, "┊") {
+		t.Fatalf("inspection was not rendered contextually:\n%s", content)
+	}
+
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model = updated.(watchModel)
+	if model.focusSeries != 1 {
+		t.Fatalf("down arrow did not select the next series: %+v", model)
+	}
+
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	model = updated.(watchModel)
+	if model.inspect {
+		t.Fatalf("escape did not close inspection: %+v", model)
+	}
+}
+
+func TestWatchModelInspectionWrapsWithoutOutOfRangeState(t *testing.T) {
+	model := testWatchModel(t)
+	model.focusIndex = model.chart.PointCount() - 1
+	model.focusSeries = model.chart.SeriesCount() - 1
+	model.inspect = true
+
+	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+	model = updated.(watchModel)
+	if model.focusIndex != 0 {
+		t.Fatalf("category selection did not wrap: %+v", model)
+	}
+	updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	model = updated.(watchModel)
+	if model.focusSeries != 0 {
+		t.Fatalf("series selection did not wrap: %+v", model)
+	}
+}
+
+func TestEveryWatchDemoSupportsInspectionAtStandardSize(t *testing.T) {
+	for _, name := range chartmux.DemoNames() {
+		t.Run(name, func(t *testing.T) {
+			model := testWatchModelFor(t, name)
+			updated, _ := model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+			model = updated.(watchModel)
+			updated, _ = model.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyRight}))
+			model = updated.(watchModel)
+
+			content := model.View().Content
+			if strings.Contains(content, "terminal is too short") || strings.Contains(content, "terminal too short") {
+				t.Fatalf("inspected chart did not fit a standard terminal:\n%s", content)
+			}
+			if lines := terminalLineCount(content); lines > 24 {
+				t.Fatalf("inspected chart uses %d rows in a 24-row terminal:\n%s", lines, content)
+			}
+		})
+	}
+}
+
 func TestWatchModelSuspendsThroughBubbleTea(t *testing.T) {
 	model := testWatchModel(t)
 	_, command := model.Update(tea.KeyPressMsg(tea.Key{Code: 'z', Mod: tea.ModCtrl}))

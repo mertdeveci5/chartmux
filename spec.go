@@ -558,10 +558,12 @@ func (chart *Chart) compileHistogram() error {
 		step = 1
 	}
 	chart.labels = make([]string, bins)
+	boundaries := make([]string, bins+1)
+	for index := range boundaries {
+		boundaries[index] = formatBinBoundary(minimum+float64(index)*step, step)
+	}
 	for index := range bins {
-		start := minimum + float64(index)*step
-		end := start + step
-		chart.labels[index] = formatBinBoundary(start) + "–" + formatBinBoundary(end)
+		chart.labels[index] = boundaries[index] + "–" + boundaries[index+1]
 	}
 	for _, value := range values {
 		index := min(bins-1, int((value-minimum)/step))
@@ -571,8 +573,18 @@ func (chart *Chart) compileHistogram() error {
 	return nil
 }
 
-func formatBinBoundary(value float64) string {
-	return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(value, 'f', 2, 64), "0"), ".")
+func formatBinBoundary(value, step float64) string {
+	precision := 2
+	if math.Abs(step) >= 1 {
+		precision = 0
+	} else if math.Abs(step) >= 0.1 {
+		precision = 1
+	}
+	formatted := strconv.FormatFloat(value, 'f', precision, 64)
+	if precision == 0 {
+		return formatted
+	}
+	return strings.TrimRight(strings.TrimRight(formatted, "0"), ".")
 }
 
 func humanize(value string) string {

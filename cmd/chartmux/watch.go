@@ -18,13 +18,16 @@ const watchNoticeDuration = 2 * time.Second
 type clearWatchNoticeMsg uint64
 
 type watchModel struct {
-	chart    *chartmux.Chart
-	width    int
-	height   int
-	showHelp bool
-	notice   string
-	noticeID uint64
-	err      error
+	chart       *chartmux.Chart
+	width       int
+	height      int
+	showHelp    bool
+	inspect     bool
+	focusIndex  int
+	focusSeries int
+	notice      string
+	noticeID    uint64
+	err         error
 }
 
 func newWatchModel(chart *chartmux.Chart) watchModel {
@@ -43,10 +46,28 @@ func (model watchModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.err = nil
 	case tea.KeyPressMsg:
 		switch message.String() {
-		case "q", "ctrl+c", "esc":
+		case "q", "ctrl+c":
+			return model, tea.Quit
+		case "esc":
+			if model.inspect {
+				model.inspect = false
+				return model, nil
+			}
 			return model, tea.Quit
 		case "ctrl+z":
 			return model, tea.Suspend
+		case "left":
+			model.inspect = true
+			model.focusIndex = wrapWatchSelection(model.focusIndex-1, model.chart.PointCount())
+		case "right":
+			model.inspect = true
+			model.focusIndex = wrapWatchSelection(model.focusIndex+1, model.chart.PointCount())
+		case "up":
+			model.inspect = true
+			model.focusSeries = wrapWatchSelection(model.focusSeries-1, model.chart.SeriesCount())
+		case "down":
+			model.inspect = true
+			model.focusSeries = wrapWatchSelection(model.focusSeries+1, model.chart.SeriesCount())
 		case "?":
 			model.showHelp = !model.showHelp
 		case "c":
@@ -100,7 +121,13 @@ func (model watchModel) renderChart() (string, error) {
 
 	plotHeight := availableHeight
 	for plotHeight >= chartmux.MinTerminalHeight {
-		content, err := model.chart.Terminal(chartmux.TerminalOptions{Width: width, Height: plotHeight})
+		content, err := model.chart.Terminal(chartmux.TerminalOptions{
+			Width:       width,
+			Height:      plotHeight,
+			Inspect:     model.inspect,
+			FocusIndex:  model.focusIndex,
+			FocusSeries: model.focusSeries,
+		})
 		if err != nil {
 			return "", err
 		}
@@ -116,7 +143,7 @@ func (model watchModel) renderChart() (string, error) {
 func (model watchModel) footer(width int) string {
 	_, height := model.dimensions()
 	left := fmt.Sprintf("UNICODE · %d×%d", width, height)
-	right := "? help · c copy · q quit"
+	right := "←→ inspect · ? help · c copy · q quit"
 	if model.notice != "" {
 		right = model.notice
 	}
@@ -131,8 +158,19 @@ func (model watchModel) footer(width int) string {
 	if !model.showHelp {
 		return footer
 	}
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("#71717A")).Render("c copy chart · ctrl+z suspend · ? close help · q quit")
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("#71717A")).Render("←→ point · ↑↓ series · esc close · c copy · ctrl+z suspend · ? close help · q quit")
 	return lipgloss.JoinVertical(lipgloss.Left, ansi.Truncate(help, max(1, width), "…"), footer)
+}
+
+func wrapWatchSelection(value, count int) int {
+	if count <= 0 {
+		return 0
+	}
+	value %= count
+	if value < 0 {
+		value += count
+	}
+	return value
 }
 
 func (model watchModel) dimensions() (int, int) {

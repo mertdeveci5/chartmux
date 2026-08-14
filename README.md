@@ -45,14 +45,14 @@ List every built-in example or display them all:
 
 ## Native terminal UI
 
-One-shot output and the responsive UI both use portable Unicode cells: solid and fractional blocks for bars, connected curves for lines, density cells for heatmaps, and proportional block views for categorical charts. The interactive UI is powered by Bubble Tea and remains text-native in every terminal:
+One-shot output and the responsive UI both use the same portable Unicode cell renderer. It layers sparse grids, axes, stable series textures, marks, crosshairs, and annotations deterministically, so labels never overwrite data and stacked bars never acquire accidental gaps. Lines and areas use a dithered terminal grammar; heatmaps use compact density matrices; pie, donut, and radar charts use real radial geometry. The interactive shell is powered by Bubble Tea and remains text-native in every terminal:
 
 ```bash
 ./chartmux demo line --watch
 ./chartmux demo stacked-bar --watch
 ```
 
-Resize the window to resize the chart. Press `c` to copy the plain-text chart through the terminal clipboard protocol, `?` for help, `ctrl+z` to suspend, or `q` to quit. PNG, SVG, and HTML remain available as explicit export formats, but interactive terminal charts never switch to an image protocol.
+Resize the window to resize the chart. Press `←` or `→` to inspect categories and `↑` or `↓` to switch the focused series; the inspector wraps safely and shows all values for the selected category. Press `esc` to close it, `c` to copy the plain-text chart through the terminal clipboard protocol, `?` for help, `ctrl+z` to suspend, or `q` to quit. PNG, SVG, and HTML remain available as explicit export formats, but interactive terminal charts never switch to an image protocol.
 
 Add collision-safe narrative notes from the CLI. Repeat `--annotation` to add more than one; annotations receive their own reserved band instead of covering chart marks:
 

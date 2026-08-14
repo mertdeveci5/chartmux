@@ -11,26 +11,10 @@ import (
 
 var horizontalFractions = [...]rune{' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'}
 
-func (chart *Chart) terminalProportions(width, height int) (string, error) {
-	values := chart.series[0].values
-	requiredHeight := len(values) + 1
-	if height < requiredHeight {
-		return "", fmt.Errorf("terminal is too short for %d categories; increase the chart height", len(values))
-	}
-	total := 0.0
-	for _, value := range values {
-		if !isMissing(value) {
-			total += value
-		}
-	}
-
-	rows := make([]string, 0, min(height, len(values)+1))
-	rows = append(rows, chart.terminalSegmentBand(values, total, width))
+func (chart *Chart) terminalProportionLegendRows(values []float64, total float64, width int) []string {
+	rows := make([]string, 0, len(values))
 	labelWidth := terminalLabelWidth(chart.labels, 8, min(20, width/3))
 	for index, value := range values {
-		if len(rows) >= height {
-			break
-		}
 		style := lipgloss.NewStyle().Foreground(terminalColor(defaultColors[index%len(defaultColors)]))
 		valueText := "–"
 		percentText := "  0.0%"
@@ -40,10 +24,10 @@ func (chart *Chart) terminalProportions(width, height int) (string, error) {
 				percentText = fmt.Sprintf("%5.1f%%", value/total*100)
 			}
 		}
-		line := style.Render(string(terminalMarker(index))+"█") + " " + padTerminal(terminalSafeText(chart.labels[index]), labelWidth) + "  " + valueText + "  " + percentText
+		line := style.Render(string(terminalBarPattern(index))) + " " + padTerminal(terminalSafeText(chart.labels[index]), labelWidth) + "  " + valueText + "  " + percentText
 		rows = append(rows, ansi.Truncate(line, width, "…"))
 	}
-	return strings.Join(rows, "\n"), nil
+	return rows
 }
 
 func (chart *Chart) terminalSegmentBand(values []float64, total float64, width int) string {
@@ -78,7 +62,7 @@ func (chart *Chart) terminalSegmentBand(values []float64, total float64, width i
 		cells := max(0, end-used)
 		if cells > 0 {
 			style := lipgloss.NewStyle().Foreground(terminalColor(defaultColors[index%len(defaultColors)]))
-			band.WriteString(style.Render(strings.Repeat("█", cells)))
+			band.WriteString(style.Render(strings.Repeat(string(terminalBarPattern(index)), cells)))
 			used += cells
 		}
 		drawnSegments++
@@ -90,27 +74,31 @@ func (chart *Chart) terminalSegmentBand(values []float64, total float64, width i
 }
 
 func (chart *Chart) terminalHeatmap(width, height int) (string, error) {
+	return chart.terminalHeatmapWithState(width, height, terminalRenderState{})
+}
+
+func (chart *Chart) terminalHeatmapWithState(width, height int, state terminalRenderState) (string, error) {
 	showAxes := displayValue(chart.spec.Axes, true)
-	requiredHeight := len(chart.labels)
+	baseHeight := len(chart.labels)
 	if showAxes {
-		requiredHeight++
+		baseHeight++
 	}
-	if height < requiredHeight {
+	if height < baseHeight {
 		return "", fmt.Errorf("terminal is too short for %d heatmap rows; increase the chart height", len(chart.labels))
 	}
 	labelWidth := 0
 	if showAxes {
 		labelWidth = terminalLabelWidth(chart.labels, 4, min(14, width/4))
 	}
-	prefixWidth := labelWidth
-	if prefixWidth > 0 {
-		prefixWidth++
+	prefixWidth := 0
+	if showAxes {
+		prefixWidth = labelWidth + 3
 	}
-	gapWidth := max(0, len(chart.series)-1)
+	gapWidth := max(0, len(chart.series)-1) * 2
 	if width-prefixWidth-gapWidth < len(chart.series) {
 		return "", fmt.Errorf("terminal is too narrow for %d heatmap series; increase the width", len(chart.series))
 	}
-	cellWidth := max(4, (width-prefixWidth-gapWidth)/max(1, len(chart.series)))
+	cellWidth := max(7, min(14, (width-prefixWidth-gapWidth)/max(1, len(chart.series))))
 
 	maximum := 0.0
 	for _, series := range chart.series {
@@ -124,17 +112,21 @@ func (chart *Chart) terminalHeatmap(width, height int) (string, error) {
 		maximum = 1
 	}
 
-	rows := make([]string, 0, min(height, len(chart.labels)+1))
+	rows := make([]string, 0, min(height, baseHeight+2))
 	if showAxes {
-		header := strings.Repeat(" ", prefixWidth)
+		header := strings.Repeat(" ", labelWidth) + " │ "
 		for index, series := range chart.series {
 			if index > 0 {
-				header += " "
+				header += "  "
 			}
 			style := lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color))
 			header += style.Render(padTerminal(terminalSafeText(series.spec.Label), cellWidth))
 		}
 		rows = append(rows, ansi.Truncate(header, width, "…"))
+		if height >= baseHeight+1 {
+			separator := strings.Repeat("─", labelWidth+1) + "┼" + strings.Repeat("─", max(1, min(width-labelWidth-2, len(chart.series)*(cellWidth+2))))
+			rows = append(rows, lipgloss.NewStyle().Foreground(terminalColor(terminalAxisColor)).Faint(true).Render(ansi.Truncate(separator, width, "")))
+		}
 	}
 	for pointIndex, label := range chart.labels {
 		if len(rows) >= height {
@@ -142,85 +134,51 @@ func (chart *Chart) terminalHeatmap(width, height int) (string, error) {
 		}
 		line := ""
 		if showAxes {
-			line = padTerminal(terminalSafeText(label), labelWidth) + " "
+			labelText := padTerminalLeft(terminalSafeText(label), labelWidth)
+			if state.inspect && pointIndex == state.focusIndex {
+				labelText = lipgloss.NewStyle().Bold(true).Render(labelText)
+			}
+			line = labelText + " │ "
 		}
 		for seriesIndex, series := range chart.series {
 			if seriesIndex > 0 {
-				line += " "
+				line += "  "
 			}
-			line += terminalHeatCell(series.values[pointIndex], maximum, cellWidth, series.spec.Color)
+			focused := state.inspect && pointIndex == state.focusIndex && seriesIndex == state.focusSeries
+			dimmed := state.inspect && !focused
+			line += terminalHeatCell(series.values[pointIndex], maximum, cellWidth, series.spec.Color, focused, dimmed)
 		}
 		rows = append(rows, ansi.Truncate(line, width, "…"))
+	}
+	if len(rows) < height {
+		key := "Low  ░▒▓█  High"
+		if showAxes {
+			key = strings.Repeat(" ", labelWidth) + " │ " + key
+		}
+		rows = append(rows, lipgloss.NewStyle().Foreground(terminalColor(terminalAxisColor)).Faint(true).Render(key))
 	}
 	return strings.Join(rows, "\n"), nil
 }
 
-func terminalHeatCell(value, maximum float64, width int, color string) string {
+func terminalHeatCell(value, maximum float64, width int, color string, focused, dimmed bool) string {
 	if isMissing(value) {
-		return padTerminal("·", width)
+		style := lipgloss.NewStyle().Bold(focused).Faint(dimmed)
+		return padTerminal(style.Render("· –"), width)
 	}
 	density := []rune{'░', '▒', '▓', '█'}
 	index := min(len(density)-1, max(0, int(math.Round(value/maximum*float64(len(density)-1)))))
 	valueText := formatValue(value)
-	fillWidth := max(1, width-ansi.StringWidth(valueText)-1)
-	fill := lipgloss.NewStyle().Foreground(terminalColor(color)).Render(strings.Repeat(string(density[index]), fillWidth))
-	return padTerminal(fill+" "+valueText, width)
-}
-
-func (chart *Chart) terminalRadar(width, height int) (string, error) {
-	showAxes := displayValue(chart.spec.Axes, true)
-	requiredHeight := len(chart.labels) * len(chart.series)
-	if height < requiredHeight {
-		return "", fmt.Errorf("terminal is too short for %d radar rows; increase the chart height", requiredHeight)
-	}
-	labelWidth := 0
-	if showAxes {
-		labelWidth = terminalLabelWidth(chart.labels, 8, min(18, width/4))
-	}
-	seriesLabels := make([]string, len(chart.series))
-	for index, series := range chart.series {
-		seriesLabels[index] = series.spec.Label
-	}
-	seriesWidth := terminalLabelWidth(seriesLabels, 6, min(14, width/5))
-	maximum := chart.spec.Max
-	if maximum <= 0 {
-		_, maximum = chart.valueRange(nil)
-	}
-	if maximum <= 0 {
-		maximum = 1
-	}
-	valueWidth := terminalValueWidth(chart.series)
-	barWidth := max(1, width-labelWidth-seriesWidth-valueWidth-4)
-
-	rows := make([]string, 0, min(height, len(chart.labels)*len(chart.series)))
-	for pointIndex, label := range chart.labels {
-		for seriesIndex, series := range chart.series {
-			if len(rows) >= height {
-				return strings.Join(rows, "\n"), nil
-			}
-			metric := ""
-			if showAxes {
-				if seriesIndex == 0 {
-					metric = terminalSafeText(label)
-				}
-				metric = padTerminal(metric, labelWidth) + " "
-			}
-			value := series.values[pointIndex]
-			valueText := "–"
-			ratio := 0.0
-			if !isMissing(value) {
-				valueText = formatValue(value)
-				ratio = value / maximum
-			}
-			style := lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color))
-			line := metric + padTerminal(terminalSafeText(series.spec.Label), seriesWidth) + " " + renderHorizontalBar(ratio, barWidth, style) + " " + padTerminalLeft(valueText, valueWidth)
-			rows = append(rows, ansi.Truncate(line, width, "…"))
-		}
-	}
-	return strings.Join(rows, "\n"), nil
+	fillWidth := min(4, max(1, width-ansi.StringWidth(valueText)-1))
+	style := lipgloss.NewStyle().Foreground(terminalColor(color)).Bold(focused).Faint(dimmed)
+	cell := style.Render(strings.Repeat(string(density[index]), fillWidth) + " " + valueText)
+	return padTerminal(cell, width)
 }
 
 func (chart *Chart) terminalFunnel(width, height int) (string, error) {
+	return chart.terminalFunnelWithState(width, height, terminalRenderState{})
+}
+
+func (chart *Chart) terminalFunnelWithState(width, height int, state terminalRenderState) (string, error) {
 	showAxes := displayValue(chart.spec.Axes, true)
 	showValues := displayValue(chart.spec.Labels, false)
 	if height < len(chart.labels) {
@@ -244,9 +202,12 @@ func (chart *Chart) terminalFunnel(width, height int) (string, error) {
 		maximum = 1
 	}
 	barWidth := max(1, width-labelWidth-valueWidth-3)
-	style := lipgloss.NewStyle().Foreground(terminalColor(chart.series[0].spec.Color))
-
-	rows := make([]string, 0, min(height, len(chart.labels)))
+	showConversions := height >= len(chart.labels)*2-1
+	rowCapacity := len(chart.labels)
+	if showConversions {
+		rowCapacity = len(chart.labels)*2 - 1
+	}
+	rows := make([]string, 0, min(height, rowCapacity))
 	for index, label := range chart.labels {
 		if len(rows) >= height {
 			break
@@ -254,20 +215,49 @@ func (chart *Chart) terminalFunnel(width, height int) (string, error) {
 		value := chart.series[0].values[index]
 		ratio := 0.0
 		valueText := "–"
-		if value != math.MaxFloat64 {
+		if !isMissing(value) {
 			ratio = value / maximum
 			valueText = formatValue(value)
+		}
+		style := lipgloss.NewStyle().Foreground(terminalColor(chart.series[0].spec.Color))
+		if state.inspect && index != state.focusIndex {
+			style = style.Faint(true)
+		}
+		if state.inspect && index == state.focusIndex {
+			style = style.Bold(true)
 		}
 		bar := renderCenteredBar(ratio, barWidth, style)
 		line := ""
 		if showAxes {
-			line = padTerminal(terminalSafeText(label), labelWidth) + " "
+			labelText := padTerminal(terminalSafeText(label), labelWidth)
+			if state.inspect && index == state.focusIndex {
+				labelText = lipgloss.NewStyle().Bold(true).Render(labelText)
+			}
+			line = labelText + " "
 		}
 		line += bar
 		if showValues {
 			line += " " + padTerminalLeft(valueText, valueWidth)
 		}
 		rows = append(rows, ansi.Truncate(line, width, "…"))
+		if showConversions && index+1 < len(chart.labels) {
+			conversion := "↓   –"
+			next := chart.series[0].values[index+1]
+			if !isMissing(value) && !isMissing(next) && value > 0 {
+				conversion = fmt.Sprintf("↓ %5.1f%%", next/value*100)
+			}
+			conversionLine := ""
+			if showAxes {
+				conversionLine = strings.Repeat(" ", labelWidth) + " "
+			}
+			conversionWidth := ansi.StringWidth(conversion)
+			left := max(0, (barWidth-conversionWidth)/2)
+			conversionLine += strings.Repeat(" ", left) + conversion + strings.Repeat(" ", max(0, barWidth-conversionWidth-left))
+			if showValues {
+				conversionLine += strings.Repeat(" ", valueWidth+1)
+			}
+			rows = append(rows, lipgloss.NewStyle().Foreground(terminalColor(terminalAxisColor)).Faint(true).Render(ansi.Truncate(conversionLine, width, "")))
+		}
 	}
 	return strings.Join(rows, "\n"), nil
 }
@@ -322,7 +312,7 @@ func terminalValueWidth(series []compiledSeries) int {
 	return width
 }
 
-func (chart *Chart) terminalDivergingBars(width, height int) (string, error) {
+func (chart *Chart) terminalDivergingBars(width, height int, state terminalRenderState) (string, error) {
 	rowCount := len(chart.labels) * len(chart.series)
 	if rowCount > height {
 		return "", fmt.Errorf("terminal is too short for %d signed bars; increase the chart height", rowCount)
@@ -352,30 +342,62 @@ func (chart *Chart) terminalDivergingBars(width, height int) (string, error) {
 	}
 	positiveWidth := max(0, plotWidth-1-negativeWidth)
 
-	rows := make([]string, 0, rowCount)
+	showScale := displayValue(chart.spec.Axes, true) && rowCount+1 <= height
+	rows := make([]string, 0, rowCount+1)
+	if showScale {
+		scale := make([]rune, plotWidth)
+		for index := range scale {
+			scale[index] = terminalTrackGlyph(index)
+		}
+		minimumText := formatValue(minimum)
+		maximumText := formatValue(maximum)
+		copy(scale, []rune(minimumText))
+		zeroIndex := min(plotWidth-1, negativeWidth)
+		copy(scale[zeroIndex:], []rune("0"))
+		maximumStart := max(zeroIndex+1, plotWidth-len([]rune(maximumText)))
+		copy(scale[maximumStart:], []rune(maximumText))
+		prefix := strings.Repeat(" ", labelWidth+1)
+		rows = append(rows, prefix+lipgloss.NewStyle().Foreground(terminalColor(terminalTextColor)).Faint(true).Render(string(scale)))
+	}
 	rowIndex := 0
 	for pointIndex := range chart.labels {
-		for _, series := range chart.series {
+		for seriesIndex, series := range chart.series {
 			value := series.values[pointIndex]
 			valueText := "–"
-			negativeBar := strings.Repeat(" ", negativeWidth)
-			positiveBar := strings.Repeat(" ", positiveWidth)
+			negativeBar := terminalTrackRun(0, negativeWidth)
+			positiveBar := terminalTrackRun(negativeWidth+1, positiveWidth)
 			style := lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color))
+			if state.inspect && (pointIndex != state.focusIndex || seriesIndex != state.focusSeries) {
+				style = style.Faint(true)
+			}
+			if state.inspect && pointIndex == state.focusIndex && seriesIndex == state.focusSeries {
+				style = style.Bold(true)
+			}
 			if !isMissing(value) {
 				valueText = formatValue(value)
 				if value < 0 && negativeWidth > 0 {
 					bar, cells := horizontalBar(value/minimum, negativeWidth)
-					negativeBar = strings.Repeat(" ", negativeWidth-cells) + style.Render(bar)
+					negativeBar = terminalTrackRun(0, negativeWidth-cells) + style.Render(bar)
 				} else if value > 0 && positiveWidth > 0 {
-					positiveBar = renderHorizontalBar(value/maximum, positiveWidth, style)
+					bar, cells := horizontalBar(value/maximum, positiveWidth)
+					positiveBar = style.Render(bar) + terminalTrackRun(negativeWidth+1+cells, positiveWidth-cells)
 				}
 			}
-			line := padTerminal(labels[rowIndex], labelWidth) + " " + negativeBar + "│" + positiveBar + " " + padTerminalLeft(valueText, valueWidth)
+			axisStyle := lipgloss.NewStyle().Foreground(terminalColor(terminalAxisColor)).Faint(true)
+			line := padTerminal(labels[rowIndex], labelWidth) + " " + negativeBar + axisStyle.Render("│") + positiveBar + " " + padTerminalLeft(valueText, valueWidth)
 			rows = append(rows, ansi.Truncate(line, width, "…"))
 			rowIndex++
 		}
 	}
 	return strings.Join(rows, "\n"), nil
+}
+
+func terminalTrackRun(start, width int) string {
+	var run strings.Builder
+	for index := 0; index < width; index++ {
+		run.WriteRune(terminalTrackGlyph(start + index))
+	}
+	return lipgloss.NewStyle().Foreground(terminalColor(terminalGridColor)).Faint(true).Render(run.String())
 }
 
 func padTerminal(value string, width int) string {
