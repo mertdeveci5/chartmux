@@ -590,6 +590,367 @@ func TestSignedBarsUseDivergingNativeAxis(t *testing.T) {
 	}
 }
 
+func TestStackedBarsUseContiguousPatternCells(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		Layout:  Stacked,
+		XAxis:   AxisSpec{DataKey: "period"},
+		Series: []SeriesSpec{
+			{DataKey: "revenue", Label: "Revenue"},
+			{DataKey: "cost", Label: "Cost"},
+		},
+		Data: []Row{{"period": "FY25", "revenue": 37, "cost": 63}},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.terminalBars(40, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if strings.ContainsAny(plain, "▁▂▃▅▆▇") {
+		t.Fatalf("stacked bars contain fractional internal gaps:\n%s", plain)
+	}
+	if !strings.Contains(plain, "█") || !strings.Contains(plain, "▓") {
+		t.Fatalf("stacked series are not represented by stable fill patterns:\n%s", plain)
+	}
+}
+
+func TestTerminalChartsUseAConsistentLayeredGrid(t *testing.T) {
+	for _, name := range []string{"line", "area", "grouped-bar", "stacked-bar", "combo"} {
+		t.Run(name, func(t *testing.T) {
+			spec, _ := Demo(name)
+			chart, err := New(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := chart.Terminal(TerminalOptions{Width: 80, Height: 14})
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain := ansi.Strip(output)
+			if !strings.ContainsAny(plain, "┄┈") {
+				t.Fatalf("%s chart has no terminal-native grid:\n%s", name, plain)
+			}
+			if !strings.Contains(plain, "└") {
+				t.Fatalf("%s chart has no coherent axis baseline:\n%s", name, plain)
+			}
+		})
+	}
+}
+
+func TestVerticalBarsUseAlignedCaps(t *testing.T) {
+	spec, _ := Demo("stacked-bar")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 80, Height: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "▄") {
+		t.Fatalf("stacked bars have no deliberate cap treatment:\n%s", plain)
+	}
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.Contains(line, "▄") && strings.ContainsAny(line, "▁▂▃▅▆▇") {
+			t.Fatalf("bar cap row contains incoherent fractional glyphs:\n%s", plain)
+		}
+	}
+}
+
+func TestRadarTerminalUsesActualRadialGeometry(t *testing.T) {
+	spec, _ := Demo("radar")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 64, Height: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if strings.Contains(plain, "Reach      Desktop") {
+		t.Fatalf("radar chart fell back to a comparative bar table:\n%s", plain)
+	}
+	for _, label := range []string{"Reach", "Engagement", "Conversion", "Retention", "Revenue"} {
+		if !strings.Contains(plain, label) {
+			t.Fatalf("radar chart is missing metric %q:\n%s", label, plain)
+		}
+	}
+	if !strings.ContainsAny(plain, "·•┄") || !strings.ContainsAny(plain, "●◆") {
+		t.Fatalf("radar chart has no radial grid and series geometry:\n%s", plain)
+	}
+}
+
+func TestHeatmapUsesACompactMatrixAndDensityKey(t *testing.T) {
+	spec, _ := Demo("heatmap")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.terminalHeatmap(64, 14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	for _, expected := range []string{"Morning", "Mon │", "Low", "░▒▓█", "High"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("heatmap is missing matrix affordance %q:\n%s", expected, plain)
+		}
+	}
+	for _, line := range strings.Split(plain, "\n") {
+		if ansi.StringWidth(line) > 64 {
+			t.Fatalf("heatmap row is %d columns wide:\n%s", ansi.StringWidth(line), plain)
+		}
+	}
+}
+
+func TestFunnelShowsStageToStageConversionWhenSpaceAllows(t *testing.T) {
+	spec, _ := Demo("funnel")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.terminalFunnel(64, 14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	for _, expected := range []string{"Visitors", "Signups", "↓  55.0%", "↓  57.6%", "↓  53.9%"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("funnel is missing conversion context %q:\n%s", expected, plain)
+		}
+	}
+}
+
+func TestTerminalInspectionIsBoundedAndContextual(t *testing.T) {
+	spec, _ := Demo("line")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{
+		Width:       80,
+		Height:      14,
+		Inspect:     true,
+		FocusIndex:  1,
+		FocusSeries: 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	for _, expected := range []string{"Feb", "Desktop", "305", "┊"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("inspection output is missing %q:\n%s", expected, plain)
+		}
+	}
+	if _, err := chart.Terminal(TerminalOptions{
+		Width:       80,
+		Height:      14,
+		Inspect:     true,
+		FocusIndex:  10_000,
+		FocusSeries: 10_000,
+	}); err != nil {
+		t.Fatalf("out-of-range inspection should clamp safely: %v", err)
+	}
+}
+
+func TestDataBoundTerminalAnnotationMarksThePlot(t *testing.T) {
+	spec, _ := Demo("line")
+	index := 1
+	spec.Annotations = []Annotation{{
+		Text:      "Inflection",
+		DataIndex: &index,
+		Series:    "desktop",
+		Color:     "#F59E0B",
+	}}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 80, Height: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "✦") || !strings.Contains(plain, "Feb · Desktop") {
+		t.Fatalf("data-bound annotation is not connected to its plot mark:\n%s", plain)
+	}
+}
+
+func TestHorizontalBarsLabelEverySeriesRow(t *testing.T) {
+	spec, _ := Demo("horizontal-bar")
+	spec.Data = spec.Data[:1]
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.terminalBars(64, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	for _, label := range []string{"Jan · Desktop", "Jan · Mobile"} {
+		if !strings.Contains(plain, label) {
+			t.Fatalf("horizontal bars are missing %q:\n%s", label, plain)
+		}
+	}
+}
+
+func TestAreaTerminalUsesFillAndZeroBaseline(t *testing.T) {
+	spec, _ := Demo("area")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 80, Height: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "░") || !strings.Contains(plain, "▒") {
+		t.Fatalf("area chart does not render accessible fill patterns:\n%s", plain)
+	}
+	if regexp.MustCompile(`(?m)^\s*-\d`).MatchString(plain) {
+		t.Fatalf("non-negative area chart extends below zero:\n%s", plain)
+	}
+}
+
+func TestComboLegendDistinguishesBarsFromLines(t *testing.T) {
+	spec, _ := Demo("combo")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 80, Height: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := ansi.Strip(output)
+	if !strings.Contains(plain, "█ Desktop") || !strings.Contains(plain, "◆·· Mobile") {
+		t.Fatalf("combo legend does not distinguish bar and line marks:\n%s", plain)
+	}
+	axisColumn := -1
+	for _, line := range strings.Split(plain, "\n") {
+		if strings.Contains(line, "└") {
+			break
+		}
+		axisIndex := strings.IndexAny(line, "│├┤")
+		if axisIndex < 0 {
+			continue
+		}
+		column := ansi.StringWidth(line[:axisIndex])
+		if axisColumn < 0 {
+			axisColumn = column
+		} else if column != axisColumn {
+			t.Fatalf("combo bars overwrite the y axis at column %d, want %d:\n%s", column, axisColumn, plain)
+		}
+	}
+}
+
+func TestPieAndDonutUseDistinctNativeShapes(t *testing.T) {
+	pieSpec, _ := Demo("pie")
+	pieChart, err := New(pieSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pieOutput, err := pieChart.Terminal(TerminalOptions{Width: 80, Height: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	donutSpec, _ := Demo("donut")
+	donutChart, err := New(donutSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	donutOutput, err := donutChart.Terminal(TerminalOptions{Width: 80, Height: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pieLines := strings.Split(ansi.Strip(pieOutput), "\n")
+	donutLines := strings.Split(ansi.Strip(donutOutput), "\n")
+	if strings.Join(pieLines[1:], "\n") == strings.Join(donutLines[1:], "\n") {
+		t.Fatal("pie and donut terminal charts use the same body")
+	}
+	if !strings.Contains(ansi.Strip(pieOutput), "▓") {
+		t.Fatalf("pie segments are not pattern-distinct without color:\n%s", ansi.Strip(pieOutput))
+	}
+	if !strings.Contains(ansi.Strip(donutOutput), "Total") {
+		t.Fatalf("donut chart does not expose its hollow-center total:\n%s", ansi.Strip(donutOutput))
+	}
+}
+
+func TestZeroTotalPolarChartsShowAnEmptyState(t *testing.T) {
+	for _, name := range []string{"pie", "donut"} {
+		t.Run(name, func(t *testing.T) {
+			spec, _ := Demo(name)
+			for rowIndex := range spec.Data {
+				spec.Data[rowIndex][spec.Series[0].DataKey] = 0
+			}
+			chart, err := New(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := chart.Terminal(TerminalOptions{Width: 64, Height: 14})
+			if err != nil {
+				t.Fatal(err)
+			}
+			plain := ansi.Strip(output)
+			if !strings.Contains(plain, "No data") || strings.Contains(plain, "████") {
+				t.Fatalf("zero-total %s chart rendered a false dominant slice:\n%s", name, plain)
+			}
+		})
+	}
+}
+
+func TestHistogramTerminalUsesPresentationPrecision(t *testing.T) {
+	spec, _ := Demo("histogram")
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 80, Height: 14})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regexp.MustCompile(`\d+\.\d{2}`).MatchString(ansi.Strip(output)) {
+		t.Fatalf("histogram bin labels use excessive precision:\n%s", ansi.Strip(output))
+	}
+	for index := 1; index < len(chart.labels); index++ {
+		previous := strings.Split(chart.labels[index-1], "–")
+		current := strings.Split(chart.labels[index], "–")
+		if len(previous) != 2 || len(current) != 2 || previous[1] != current[0] {
+			t.Fatalf("histogram ranges are not contiguous: %q then %q", chart.labels[index-1], chart.labels[index])
+		}
+	}
+}
+
+func TestBarCategoryLabelsRespectUnicodeDisplayWidth(t *testing.T) {
+	spec, _ := Demo("grouped-bar")
+	for index := range spec.Data {
+		spec.Data[index][spec.XAxis.DataKey] = []string{"東京", "München", "São Paulo", "서울", "Zürich", "دبي"}[index]
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.terminalBars(50, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, line := range strings.Split(ansi.Strip(output), "\n") {
+		if width := ansi.StringWidth(line); width > 50 {
+			t.Fatalf("bar line %d is %d cells wide:\n%s", index+1, width, output)
+		}
+	}
+}
+
 func TestTerminalSeriesRemainDistinctWithoutColor(t *testing.T) {
 	spec, _ := Demo("line")
 	chart, err := New(spec)
@@ -858,7 +1219,7 @@ func TestHeatmapTerminalUsesDensityCells(t *testing.T) {
 	}
 }
 
-func TestRadarTerminalUsesComparableBars(t *testing.T) {
+func TestRadarTerminalUsesComparableSeries(t *testing.T) {
 	spec, _ := Demo("radar")
 	chart, err := New(spec)
 	if err != nil {
@@ -869,8 +1230,8 @@ func TestRadarTerminalUsesComparableBars(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := ansi.Strip(output)
-	if !strings.ContainsAny(plain, "█▉▊▋▌▍▎▏") || !strings.Contains(plain, "Desktop") || !strings.Contains(plain, "Reach") {
-		t.Fatalf("radar chart is not a native comparative bar view:\n%s", output)
+	if !strings.ContainsAny(plain, "●◆") || !strings.ContainsAny(plain, "·•") || !strings.Contains(plain, "Desktop") || !strings.Contains(plain, "Reach") {
+		t.Fatalf("radar chart is not a native radial comparison:\n%s", output)
 	}
 }
 
@@ -939,7 +1300,7 @@ func TestComboTerminalContainsBarsAndLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	plain := ansi.Strip(output)
-	if !strings.Contains(plain, "█") || !strings.ContainsAny(plain, "─│╭╮╰╯") {
+	if !strings.Contains(plain, "█") || !strings.ContainsAny(plain, "·•") || !strings.Contains(plain, "◆") {
 		t.Fatalf("combo chart does not contain distinct bars and lines:\n%s", output)
 	}
 }
