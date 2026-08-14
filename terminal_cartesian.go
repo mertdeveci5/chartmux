@@ -1,6 +1,7 @@
 package chartmux
 
 import (
+	"fmt"
 	"math"
 	"strings"
 
@@ -267,6 +268,20 @@ func (chart *Chart) annotationSeriesIndex(annotation Annotation) int {
 	return -1
 }
 
+func (chart *Chart) terminalAnnotationColor(pointIndex, seriesIndex int) (string, bool) {
+	for _, annotation := range chart.spec.Annotations {
+		if annotation.DataIndex == nil || *annotation.DataIndex != pointIndex || chart.annotationSeriesIndex(annotation) != seriesIndex {
+			continue
+		}
+		color := annotation.Color
+		if color == "" {
+			color = chart.series[seriesIndex].spec.Color
+		}
+		return color, true
+	}
+	return "", false
+}
+
 func (chart *Chart) terminalComboFrame(width, height int, state terminalRenderState) (string, error) {
 	minimum, maximum := chart.valueRange(nil)
 	minimum = math.Min(0, minimum)
@@ -303,7 +318,10 @@ func (chart *Chart) terminalComboFrame(width, height int, state terminalRenderSt
 		if available < len(barSeries)*2-1 {
 			gap = 0
 		}
-		barWidth := max(1, min(3, (available-gap*max(0, len(barSeries)-1))/max(1, len(barSeries))))
+		barWidth := min(3, (available-gap*max(0, len(barSeries)-1))/max(1, len(barSeries)))
+		if len(barSeries) > 0 && barWidth < 1 {
+			return "", fmt.Errorf("terminal is too narrow for %d combo bar series; increase the width", len(barSeries))
+		}
 		groupWidth := barWidth*len(barSeries) + gap*max(0, len(barSeries)-1)
 		startX := band.left + max(0, (band.width()-groupWidth)/2)
 		for offset, seriesIndex := range barSeries {

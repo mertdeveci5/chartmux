@@ -73,10 +73,6 @@ func (chart *Chart) terminalSegmentBand(values []float64, total float64, width i
 	return band.String()
 }
 
-func (chart *Chart) terminalHeatmap(width, height int) (string, error) {
-	return chart.terminalHeatmapWithState(width, height, terminalRenderState{})
-}
-
 func (chart *Chart) terminalHeatmapWithState(width, height int, state terminalRenderState) (string, error) {
 	showAxes := displayValue(chart.spec.Axes, true)
 	baseHeight := len(chart.labels)
@@ -146,7 +142,8 @@ func (chart *Chart) terminalHeatmapWithState(width, height int, state terminalRe
 			}
 			focused := state.inspect && pointIndex == state.focusIndex && seriesIndex == state.focusSeries
 			dimmed := state.inspect && !focused
-			line += terminalHeatCell(series.values[pointIndex], maximum, cellWidth, series.spec.Color, focused, dimmed)
+			annotationColor, annotated := chart.terminalAnnotationColor(pointIndex, seriesIndex)
+			line += terminalHeatCell(series.values[pointIndex], maximum, cellWidth, series.spec.Color, focused, dimmed, annotated, annotationColor)
 		}
 		rows = append(rows, ansi.Truncate(line, width, "…"))
 	}
@@ -160,7 +157,7 @@ func (chart *Chart) terminalHeatmapWithState(width, height int, state terminalRe
 	return strings.Join(rows, "\n"), nil
 }
 
-func terminalHeatCell(value, maximum float64, width int, color string, focused, dimmed bool) string {
+func terminalHeatCell(value, maximum float64, width int, color string, focused, dimmed, annotated bool, annotationColor string) string {
 	if isMissing(value) {
 		style := lipgloss.NewStyle().Bold(focused).Faint(dimmed)
 		return padTerminal(style.Render("· –"), width)
@@ -170,12 +167,18 @@ func terminalHeatCell(value, maximum float64, width int, color string, focused, 
 	valueText := formatValue(value)
 	fillWidth := min(4, max(1, width-ansi.StringWidth(valueText)-1))
 	style := lipgloss.NewStyle().Foreground(terminalColor(color)).Bold(focused).Faint(dimmed)
-	cell := style.Render(strings.Repeat(string(density[index]), fillWidth) + " " + valueText)
+	fill := strings.Repeat(string(density[index]), fillWidth)
+	cell := style.Render(fill + " " + valueText)
+	if annotated {
+		fillRunes := []rune(fill)
+		remaining := ""
+		if len(fillRunes) > 1 {
+			remaining = style.Render(string(fillRunes[1:]))
+		}
+		marker := lipgloss.NewStyle().Foreground(terminalColor(annotationColor)).Bold(true).Render("✦")
+		cell = marker + remaining + style.Render(" "+valueText)
+	}
 	return padTerminal(cell, width)
-}
-
-func (chart *Chart) terminalFunnel(width, height int) (string, error) {
-	return chart.terminalFunnelWithState(width, height, terminalRenderState{})
 }
 
 func (chart *Chart) terminalFunnelWithState(width, height int, state terminalRenderState) (string, error) {
@@ -226,7 +229,9 @@ func (chart *Chart) terminalFunnelWithState(width, height int, state terminalRen
 		if state.inspect && index == state.focusIndex {
 			style = style.Bold(true)
 		}
-		bar := renderCenteredBar(ratio, barWidth, style)
+		annotationColor, annotated := chart.terminalAnnotationColor(index, 0)
+		annotated = annotated && !isMissing(value)
+		bar := renderCenteredAnnotatedBar(ratio, barWidth, style, annotated, annotationColor)
 		line := ""
 		if showAxes {
 			labelText := padTerminal(terminalSafeText(label), labelWidth)
@@ -272,6 +277,26 @@ func renderCenteredBar(ratio float64, width int, style lipgloss.Style) string {
 	left := max(0, (width-cells)/2)
 	right := max(0, width-cells-left)
 	return strings.Repeat(" ", left) + style.Render(bar) + strings.Repeat(" ", right)
+}
+
+func renderCenteredAnnotatedBar(ratio float64, width int, style lipgloss.Style, annotated bool, annotationColor string) string {
+	if !annotated {
+		return renderCenteredBar(ratio, width, style)
+	}
+	bar, cells := horizontalBar(ratio, width)
+	marker := lipgloss.NewStyle().Foreground(terminalColor(annotationColor)).Bold(true).Render("✦")
+	if cells == 0 {
+		left := max(0, (width-1)/2)
+		return strings.Repeat(" ", left) + marker + strings.Repeat(" ", max(0, width-left-1))
+	}
+	left := max(0, (width-cells)/2)
+	right := max(0, width-cells-left)
+	barRunes := []rune(bar)
+	styledBar := marker
+	if len(barRunes) > 1 {
+		styledBar = style.Render(string(barRunes[:len(barRunes)-1])) + marker
+	}
+	return strings.Repeat(" ", left) + styledBar + strings.Repeat(" ", right)
 }
 
 func horizontalBar(ratio float64, width int) (string, int) {
@@ -345,19 +370,17 @@ func (chart *Chart) terminalDivergingBars(width, height int, state terminalRende
 	showScale := displayValue(chart.spec.Axes, true) && rowCount+1 <= height
 	rows := make([]string, 0, rowCount+1)
 	if showScale {
-		scale := make([]rune, plotWidth)
-		for index := range scale {
-			scale[index] = terminalTrackGlyph(index)
-		}
 		minimumText := formatValue(minimum)
 		maximumText := formatValue(maximum)
-		copy(scale, []rune(minimumText))
 		zeroIndex := min(plotWidth-1, negativeWidth)
-		copy(scale[zeroIndex:], []rune("0"))
 		maximumStart := max(zeroIndex+1, plotWidth-len([]rune(maximumText)))
-		copy(scale[maximumStart:], []rune(maximumText))
+		scale := terminalScaleGuide(plotWidth,
+			terminalScaleLabel{start: zeroIndex, text: "0"},
+			terminalScaleLabel{start: 0, text: minimumText},
+			terminalScaleLabel{start: maximumStart, text: maximumText},
+		)
 		prefix := strings.Repeat(" ", labelWidth+1)
-		rows = append(rows, prefix+lipgloss.NewStyle().Foreground(terminalColor(terminalTextColor)).Faint(true).Render(string(scale)))
+		rows = append(rows, prefix+lipgloss.NewStyle().Foreground(terminalColor(terminalTextColor)).Faint(true).Render(scale))
 	}
 	rowIndex := 0
 	for pointIndex := range chart.labels {
@@ -367,6 +390,11 @@ func (chart *Chart) terminalDivergingBars(width, height int, state terminalRende
 			negativeBar := terminalTrackRun(0, negativeWidth)
 			positiveBar := terminalTrackRun(negativeWidth+1, positiveWidth)
 			style := lipgloss.NewStyle().Foreground(terminalColor(series.spec.Color))
+			annotationColor, annotated := chart.terminalAnnotationColor(pointIndex, seriesIndex)
+			annotationStyle := lipgloss.NewStyle()
+			if annotated {
+				annotationStyle = annotationStyle.Foreground(terminalColor(annotationColor)).Bold(true)
+			}
 			if state.inspect && (pointIndex != state.focusIndex || seriesIndex != state.focusSeries) {
 				style = style.Faint(true)
 			}
@@ -377,14 +405,36 @@ func (chart *Chart) terminalDivergingBars(width, height int, state terminalRende
 				valueText = formatValue(value)
 				if value < 0 && negativeWidth > 0 {
 					bar, cells := horizontalBar(value/minimum, negativeWidth)
-					negativeBar = terminalTrackRun(0, negativeWidth-cells) + style.Render(bar)
+					if annotated {
+						barRunes := []rune(bar)
+						negativeBar = terminalTrackRun(0, negativeWidth-cells) + annotationStyle.Render("✦")
+						if len(barRunes) > 1 {
+							negativeBar += style.Render(string(barRunes[1:]))
+						}
+					} else {
+						negativeBar = terminalTrackRun(0, negativeWidth-cells) + style.Render(bar)
+					}
 				} else if value > 0 && positiveWidth > 0 {
 					bar, cells := horizontalBar(value/maximum, positiveWidth)
-					positiveBar = style.Render(bar) + terminalTrackRun(negativeWidth+1+cells, positiveWidth-cells)
+					if annotated {
+						barRunes := []rune(bar)
+						positiveBar = ""
+						if len(barRunes) > 1 {
+							positiveBar = style.Render(string(barRunes[:len(barRunes)-1]))
+						}
+						positiveBar += annotationStyle.Render("✦")
+					} else {
+						positiveBar = style.Render(bar)
+					}
+					positiveBar += terminalTrackRun(negativeWidth+1+cells, positiveWidth-cells)
 				}
 			}
 			axisStyle := lipgloss.NewStyle().Foreground(terminalColor(terminalAxisColor)).Faint(true)
-			line := padTerminal(labels[rowIndex], labelWidth) + " " + negativeBar + axisStyle.Render("│") + positiveBar + " " + padTerminalLeft(valueText, valueWidth)
+			axis := axisStyle.Render("│")
+			if !isMissing(value) && value == 0 && annotated {
+				axis = annotationStyle.Render("✦")
+			}
+			line := padTerminal(labels[rowIndex], labelWidth) + " " + negativeBar + axis + positiveBar + " " + padTerminalLeft(valueText, valueWidth)
 			rows = append(rows, ansi.Truncate(line, width, "…"))
 			rowIndex++
 		}

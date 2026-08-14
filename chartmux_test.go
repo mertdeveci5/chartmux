@@ -590,6 +590,64 @@ func TestSignedBarsUseDivergingNativeAxis(t *testing.T) {
 	}
 }
 
+func TestSignedBarScalePrioritizesZeroOverACollidingMinimum(t *testing.T) {
+	spec := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		XAxis:   AxisSpec{DataKey: "period"},
+		Series:  []SeriesSpec{{DataKey: "variance", Label: "Long variance"}},
+		Data: []Row{
+			{"period": "Downside", "variance": -5},
+			{"period": "Upside", "variance": 100},
+		},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 30, Height: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scale := strings.Split(ansi.Strip(output), "\n")[0]
+	if strings.Contains(scale, "-0") || !strings.Contains(scale, "0") {
+		t.Fatalf("signed scale did not preserve an unambiguous zero label:\n%s", output)
+	}
+	if strings.Contains(scale, "-5") {
+		t.Fatalf("signed scale should omit a minimum that cannot fit beside zero:\n%s", output)
+	}
+}
+
+func TestHorizontalBarScaleSkipsCollidingMiddleLabel(t *testing.T) {
+	const maximum = 850_000_000_000.0
+	spec := Spec{
+		Version:     SpecVersion,
+		Type:        Bar,
+		Orientation: Horizontal,
+		XAxis:       AxisSpec{DataKey: "period"},
+		Series:      []SeriesSpec{{DataKey: "value", Label: "Long value"}},
+		Data:        []Row{{"period": "Long category", "value": maximum}},
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 30, Height: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scale := strings.Split(ansi.Strip(output), "\n")[0]
+	maximumText := formatValue(maximum)
+	if !strings.Contains(scale, maximumText) {
+		t.Fatalf("horizontal scale lost its maximum label:\n%s", output)
+	}
+	middleText := formatValue(maximum / 2)
+	validScale := regexp.MustCompile(`^0[ ┄]+(?:` + regexp.QuoteMeta(middleText) + `[ ┄]+)?` + regexp.QuoteMeta(maximumText) + `$`)
+	if !validScale.MatchString(strings.TrimSpace(scale)) {
+		t.Fatalf("horizontal scale fused its middle and maximum labels:\n%s", output)
+	}
+}
+
 func TestStackedBarsUseContiguousPatternCells(t *testing.T) {
 	spec := Spec{
 		Version: SpecVersion,
@@ -606,7 +664,7 @@ func TestStackedBarsUseContiguousPatternCells(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := chart.terminalBars(40, 10)
+	output, err := chart.terminalBarsWithState(40, 10, terminalRenderState{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +690,7 @@ func TestTerminalChartsUseAConsistentLayeredGrid(t *testing.T) {
 				t.Fatal(err)
 			}
 			plain := ansi.Strip(output)
-			if !strings.ContainsAny(plain, "┄┈") {
+			if !strings.Contains(plain, "┄") {
 				t.Fatalf("%s chart has no terminal-native grid:\n%s", name, plain)
 			}
 			if !strings.Contains(plain, "└") {
@@ -693,7 +751,7 @@ func TestHeatmapUsesACompactMatrixAndDensityKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := chart.terminalHeatmap(64, 14)
+	output, err := chart.terminalHeatmapWithState(64, 14, terminalRenderState{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -716,7 +774,7 @@ func TestFunnelShowsStageToStageConversionWhenSpaceAllows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := chart.terminalFunnel(64, 14)
+	output, err := chart.terminalFunnelWithState(64, 14, terminalRenderState{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -784,6 +842,179 @@ func TestDataBoundTerminalAnnotationMarksThePlot(t *testing.T) {
 	}
 }
 
+func TestDataBoundAnnotationsMarkEveryNativePlot(t *testing.T) {
+	demo := func(name string) Spec {
+		t.Helper()
+		spec, err := Demo(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return spec
+	}
+	signed := Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		XAxis:   AxisSpec{DataKey: "period"},
+		Series:  []SeriesSpec{{DataKey: "variance", Label: "Variance"}},
+		Data: []Row{
+			{"period": "Q1", "variance": -18},
+			{"period": "Q2", "variance": 12},
+		},
+	}
+	tests := []struct {
+		name   string
+		spec   Spec
+		series string
+		point  int
+	}{
+		{name: "horizontal-bar", spec: demo("horizontal-bar"), series: "desktop"},
+		{name: "signed-negative-bar", spec: signed, series: "variance"},
+		{name: "signed-positive-bar", spec: signed, series: "variance", point: 1},
+		{name: "heatmap", spec: demo("heatmap"), series: "morning"},
+		{name: "funnel", spec: demo("funnel"), series: "users"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			index := test.point
+			test.spec.Annotations = []Annotation{{
+				Text: "Material event", DataIndex: &index, Series: test.series, Color: "#F59E0B",
+			}}
+			chart, err := New(test.spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := chart.Terminal(TerminalOptions{Width: 80, Height: 14})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(ansi.Strip(output), "✦") {
+				t.Fatalf("data-bound annotation has no plot marker:\n%s", output)
+			}
+			for lineIndex, line := range strings.Split(output, "\n") {
+				if lineWidth := ansi.StringWidth(line); lineWidth > 80 {
+					t.Fatalf("annotated line %d is %d cells wide, want at most 80:\n%s", lineIndex+1, lineWidth, output)
+				}
+			}
+		})
+	}
+}
+
+func TestTinyPositiveSignedAnnotationPreservesTheValueColumn(t *testing.T) {
+	index := 1
+	chart, err := New(Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		XAxis:   AxisSpec{DataKey: "period"},
+		Series:  []SeriesSpec{{DataKey: "variance", Label: "Variance"}},
+		Data: []Row{
+			{"period": "Downside", "variance": -10},
+			{"period": "Tiny upside", "variance": 1},
+			{"period": "Upside", "variance": 100},
+		},
+		Annotations: []Annotation{{
+			Text: "Small but material", DataIndex: &index, Series: "variance", Color: "#F59E0B",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 40, Height: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundRow := false
+	for _, line := range strings.Split(ansi.Strip(output), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "Tiny upside") {
+			continue
+		}
+		foundRow = true
+		if !strings.Contains(line, "✦") || !strings.HasSuffix(line, " 1") {
+			t.Fatalf("tiny annotated positive bar lost its marker or value column:\n%s", output)
+		}
+		break
+	}
+	if !foundRow {
+		t.Fatalf("tiny annotated positive row was not rendered:\n%s", output)
+	}
+}
+
+func TestZeroHorizontalBarAnnotationMarksTheBaseline(t *testing.T) {
+	index := 0
+	chart, err := New(Spec{
+		Version:     SpecVersion,
+		Type:        Bar,
+		Orientation: Horizontal,
+		XAxis:       AxisSpec{DataKey: "period"},
+		Series:      []SeriesSpec{{DataKey: "value", Label: "Value"}},
+		Data: []Row{
+			{"period": "Zero", "value": 0},
+			{"period": "Maximum", "value": 100},
+		},
+		Annotations: []Annotation{{
+			Text: "No activity", DataIndex: &index, Series: "value", Color: "#F59E0B",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 40, Height: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundRow := false
+	for _, line := range strings.Split(ansi.Strip(output), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "Zero · Value") {
+			continue
+		}
+		foundRow = true
+		if !strings.Contains(line, "✦") {
+			t.Fatalf("zero-value horizontal annotation has no baseline marker:\n%s", output)
+		}
+		break
+	}
+	if !foundRow {
+		t.Fatalf("zero-value horizontal row was not rendered:\n%s", output)
+	}
+}
+
+func TestZeroSignedAnnotationMarksTheAxisWithoutPositiveRange(t *testing.T) {
+	index := 1
+	chart, err := New(Spec{
+		Version: SpecVersion,
+		Type:    Bar,
+		XAxis:   AxisSpec{DataKey: "period"},
+		Series:  []SeriesSpec{{DataKey: "variance", Label: "Variance"}},
+		Data: []Row{
+			{"period": "Downside", "variance": -100},
+			{"period": "Breakeven", "variance": 0},
+		},
+		Annotations: []Annotation{{
+			Text: "At plan", DataIndex: &index, Series: "variance", Color: "#F59E0B",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := chart.Terminal(TerminalOptions{Width: 40, Height: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundRow := false
+	for _, line := range strings.Split(ansi.Strip(output), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "Breakeven") {
+			continue
+		}
+		foundRow = true
+		if !strings.Contains(line, "✦") || !strings.HasSuffix(line, " 0") {
+			t.Fatalf("zero signed annotation did not mark the axis and preserve its value:\n%s", output)
+		}
+		break
+	}
+	if !foundRow {
+		t.Fatalf("zero signed row was not rendered:\n%s", output)
+	}
+}
+
 func TestHorizontalBarsLabelEverySeriesRow(t *testing.T) {
 	spec, _ := Demo("horizontal-bar")
 	spec.Data = spec.Data[:1]
@@ -791,7 +1022,7 @@ func TestHorizontalBarsLabelEverySeriesRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := chart.terminalBars(64, 8)
+	output, err := chart.terminalBarsWithState(64, 8, terminalRenderState{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,6 +1082,35 @@ func TestComboLegendDistinguishesBarsFromLines(t *testing.T) {
 		} else if column != axisColumn {
 			t.Fatalf("combo bars overwrite the y axis at column %d, want %d:\n%s", column, axisColumn, plain)
 		}
+	}
+}
+
+func TestNarrowComboRejectsOverflowingBarGroups(t *testing.T) {
+	series := make([]SeriesSpec, 6)
+	data := make([]Row, 6)
+	for seriesIndex := range series {
+		key := fmt.Sprintf("s%d", seriesIndex)
+		series[seriesIndex] = SeriesSpec{DataKey: key, Label: key, Mark: MarkBar}
+	}
+	for pointIndex := range data {
+		row := Row{"period": fmt.Sprintf("P%d", pointIndex)}
+		for seriesIndex := range series {
+			row[series[seriesIndex].DataKey] = float64((pointIndex + 1) * (seriesIndex + 1))
+		}
+		data[pointIndex] = row
+	}
+	chart, err := New(Spec{
+		Version: SpecVersion,
+		Type:    Combo,
+		XAxis:   AxisSpec{DataKey: "period"},
+		Series:  series,
+		Data:    data,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chart.Terminal(TerminalOptions{Width: MinTerminalWidth, Height: 14}); err == nil || !strings.Contains(err.Error(), "combo bar series") {
+		t.Fatalf("narrow combo overflow error = %v", err)
 	}
 }
 
@@ -940,7 +1200,7 @@ func TestBarCategoryLabelsRespectUnicodeDisplayWidth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := chart.terminalBars(50, 12)
+	output, err := chart.terminalBarsWithState(50, 12, terminalRenderState{})
 	if err != nil {
 		t.Fatal(err)
 	}

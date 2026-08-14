@@ -28,6 +28,9 @@ func terminalBarPattern(index int) rune {
 }
 
 func (chart *Chart) terminalBarsWithState(width, height int, state terminalRenderState) (string, error) {
+	// Any negative value requires a shared zero axis. The diverging layout
+	// intentionally supersedes horizontal and stacked presentation options,
+	// which cannot represent mixed signs without misleading segment geometry.
 	for _, series := range chart.series {
 		for _, value := range series.values {
 			if !isMissing(value) && value < 0 {
@@ -148,23 +151,14 @@ func (chart *Chart) paintTerminalBarRect(scene *terminalCartesianScene, x0, x1, 
 }
 
 func (chart *Chart) paintTerminalBarAnnotation(scene *terminalCartesianScene, pointIndex, seriesIndex, x, capY int) {
-	for _, annotation := range chart.spec.Annotations {
-		if annotation.DataIndex == nil || *annotation.DataIndex != pointIndex {
-			continue
-		}
-		annotationSeries := chart.annotationSeriesIndex(annotation)
-		if annotationSeries != seriesIndex {
-			continue
-		}
-		color := annotation.Color
-		if color == "" {
-			color = chart.series[seriesIndex].spec.Color
-		}
-		y := max(scene.plot.top, capY-1)
-		scene.frame.paint(x, y, '✦', terminalPaintStyle{
-			color: color, priority: terminalLayerAnnotation, bold: true,
-		})
+	color, annotated := chart.terminalAnnotationColor(pointIndex, seriesIndex)
+	if !annotated {
+		return
 	}
+	y := max(scene.plot.top, capY-1)
+	scene.frame.paint(x, y, '✦', terminalPaintStyle{
+		color: color, priority: terminalLayerAnnotation, bold: true,
+	})
 }
 
 func (chart *Chart) terminalHorizontalBarsWithState(width, height int, state terminalRenderState) (string, error) {
@@ -211,16 +205,14 @@ func (chart *Chart) terminalHorizontalBarsWithState(width, height int, state ter
 	if showScale {
 		maximumText := chart.terminalBarAxisValue(maximum)
 		middleText := chart.terminalBarAxisValue(maximum / 2)
-		track := make([]rune, plotWidth)
-		for index := range track {
-			track[index] = terminalTrackGlyph(index)
-		}
-		copy(track, []rune("0"))
 		middleStart := max(1, plotWidth/2-len([]rune(middleText))/2)
-		copy(track[middleStart:], []rune(middleText))
 		maximumStart := max(1, plotWidth-len([]rune(maximumText)))
-		copy(track[maximumStart:], []rune(maximumText))
-		rows = append(rows, strings.Repeat(" ", labelWidth+3)+lipgloss.NewStyle().Foreground(terminalColor(terminalTextColor)).Faint(true).Render(string(track)))
+		guide := terminalScaleGuide(plotWidth,
+			terminalScaleLabel{start: maximumStart, text: maximumText},
+			terminalScaleLabel{start: 0, text: "0"},
+			terminalScaleLabel{start: middleStart, text: middleText},
+		)
+		rows = append(rows, strings.Repeat(" ", labelWidth+3)+lipgloss.NewStyle().Foreground(terminalColor(terminalTextColor)).Faint(true).Render(guide))
 	}
 	for _, row := range barRows {
 		prefix := ""
@@ -234,39 +226,81 @@ func (chart *Chart) terminalHorizontalBarsWithState(width, height int, state ter
 }
 
 func (chart *Chart) renderTerminalHorizontalSegments(row terminalBarRow, maximum float64, width int, state terminalRenderState) string {
-	parts := make([]string, 0, len(row.segments)+1)
+	cells := make([]terminalHorizontalCell, width)
+	for x := range cells {
+		cells[x] = terminalHorizontalCell{
+			glyph: terminalTrackGlyph(x), color: terminalGridColor, faint: true,
+		}
+	}
+	type annotationMarker struct {
+		x     int
+		color string
+	}
+	markers := make([]annotationMarker, 0, len(row.segments))
 	previousCells := 0
 	cumulative := 0.0
 	for _, segment := range row.segments {
-		if isMissing(segment.value) || segment.value <= 0 {
+		if isMissing(segment.value) {
+			continue
+		}
+		annotationColor, annotated := chart.terminalAnnotationColor(row.point, segment.series)
+		if segment.value <= 0 {
+			if segment.value == 0 && annotated {
+				markers = append(markers, annotationMarker{x: min(previousCells, width-1), color: annotationColor})
+			}
 			continue
 		}
 		cumulative += segment.value
 		endCells := min(width, max(previousCells, int(math.Round(cumulative/maximum*float64(width)))))
 		if endCells <= previousCells {
+			if annotated {
+				markers = append(markers, annotationMarker{x: min(previousCells, width-1), color: annotationColor})
+			}
 			continue
 		}
-		style := lipgloss.NewStyle().Foreground(terminalColor(chart.series[segment.series].spec.Color))
+		paint := terminalHorizontalCell{color: chart.series[segment.series].spec.Color}
 		if state.inspect && (row.point != state.focusIndex || (row.series >= 0 && segment.series != state.focusSeries)) {
-			style = style.Faint(true)
+			paint.faint = true
 		}
 		if state.inspect && row.point == state.focusIndex && (row.series < 0 || segment.series == state.focusSeries) {
-			style = style.Bold(true)
+			paint.bold = true
 		}
-		var run strings.Builder
 		for x := previousCells; x < endCells; x++ {
-			run.WriteRune(terminalBarGlyph(segment.series, x, row.point))
+			paint.glyph = terminalBarGlyph(segment.series, x, row.point)
+			cells[x] = paint
 		}
-		parts = append(parts, style.Render(run.String()))
+		if annotated {
+			markers = append(markers, annotationMarker{x: endCells - 1, color: annotationColor})
+		}
 		previousCells = endCells
 	}
-	if previousCells < width {
-		var run strings.Builder
-		for x := previousCells; x < width; x++ {
-			run.WriteRune(terminalTrackGlyph(x))
+	for _, marker := range markers {
+		cells[marker.x] = terminalHorizontalCell{glyph: '✦', color: marker.color, bold: true}
+	}
+	return renderTerminalHorizontalCells(cells)
+}
+
+type terminalHorizontalCell struct {
+	glyph rune
+	color string
+	bold  bool
+	faint bool
+}
+
+func renderTerminalHorizontalCells(cells []terminalHorizontalCell) string {
+	parts := make([]string, 0, len(cells))
+	for start := 0; start < len(cells); {
+		end := start + 1
+		for end < len(cells) && cells[end].color == cells[start].color && cells[end].bold == cells[start].bold && cells[end].faint == cells[start].faint {
+			end++
 		}
-		track := lipgloss.NewStyle().Foreground(terminalColor(terminalGridColor)).Faint(true).Render(run.String())
-		parts = append(parts, track)
+		run := make([]rune, end-start)
+		for index := start; index < end; index++ {
+			run[index-start] = cells[index].glyph
+		}
+		style := lipgloss.NewStyle().Foreground(terminalColor(cells[start].color)).Bold(cells[start].bold).Faint(cells[start].faint)
+		parts = append(parts, style.Render(string(run)))
+		start = end
 	}
 	return strings.Join(parts, "")
 }
@@ -276,6 +310,43 @@ func terminalTrackGlyph(index int) rune {
 		return '┄'
 	}
 	return ' '
+}
+
+type terminalScaleLabel struct {
+	start int
+	text  string
+}
+
+func terminalScaleGuide(width int, labels ...terminalScaleLabel) string {
+	track := make([]rune, max(0, width))
+	occupied := make([]bool, len(track))
+	for index := range track {
+		track[index] = terminalTrackGlyph(index)
+	}
+	for _, label := range labels {
+		runes := []rune(label.text)
+		end := label.start + len(runes)
+		if len(runes) == 0 || label.start < 0 || end > len(track) {
+			continue
+		}
+		checkStart := max(0, label.start-1)
+		checkEnd := min(len(track), end+1)
+		collision := false
+		for index := checkStart; index < checkEnd; index++ {
+			if occupied[index] {
+				collision = true
+				break
+			}
+		}
+		if collision {
+			continue
+		}
+		copy(track[label.start:end], runes)
+		for index := label.start; index < end; index++ {
+			occupied[index] = true
+		}
+	}
+	return string(track)
 }
 
 func (chart *Chart) terminalBarMaximum() float64 {
