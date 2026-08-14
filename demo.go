@@ -7,6 +7,7 @@ var demoNames = []string{
 	"grouped-bar",
 	"stacked-bar",
 	"normalized-bar",
+	"annotated-bar",
 	"horizontal-bar",
 	"area",
 	"stacked-area",
@@ -34,6 +35,16 @@ func Demo(name string) (Spec, error) {
 		return visitorsSpec(Bar, "Stacked Bar Chart", Stacked), nil
 	case "normalized-bar":
 		return visitorsSpec(Bar, "100% Stacked Bar Chart", Normalized), nil
+	case "annotated-bar":
+		spec := visitorsSpec(Bar, "Illustrative Operating Performance", Grouped)
+		spec.Description = "Monthly visitors by platform | indexed operating trend"
+		spec.Footer = "Source: Company information; illustrative analysis"
+		latest := len(spec.Data) - 1
+		spec.Annotations = []Annotation{
+			{Text: "Mobile contribution expanded meaningfully into the latest period.", Position: AnnotationTop, DataIndex: &latest, Series: "mobile", Color: defaultColors[1]},
+			{Text: "Figures shown for presentation purposes; totals may not sum due to rounding.", Position: AnnotationBottom},
+		}
+		return spec, nil
 	case "horizontal-bar":
 		spec := visitorsSpec(Bar, "Horizontal Grouped Bar Chart", Grouped)
 		spec.Orientation = Horizontal

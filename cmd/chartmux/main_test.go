@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/NimbleMarkets/ntcharts/v2/picture"
 	"github.com/alecthomas/kong"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mertdeveci5/chartmux"
@@ -61,6 +60,16 @@ func TestNamedDemoIsExplicit(t *testing.T) {
 	}
 }
 
+func TestAnnotationFlagIsRepeatable(t *testing.T) {
+	cli := &CLI{}
+	if _, err := newParser(t, cli).Parse([]string{"demo", "line", "--annotation", "First note", "--annotation", "Second note"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cli.Demo.Annotation; len(got) != 2 || got[0] != "First note" || got[1] != "Second note" {
+		t.Fatalf("annotation flags = %v", got)
+	}
+}
+
 func TestRemovedCommandsAreRejected(t *testing.T) {
 	for _, command := range []string{"render", "hbar", "gauge"} {
 		cli := &CLI{}
@@ -68,6 +77,13 @@ func TestRemovedCommandsAreRejected(t *testing.T) {
 		if _, err := parser.Parse([]string{command, "data.csv"}); err == nil {
 			t.Fatalf("removed command %q was accepted", command)
 		}
+	}
+}
+
+func TestRemovedTerminalImageModeIsRejected(t *testing.T) {
+	cli := &CLI{}
+	if _, err := newParser(t, cli).Parse([]string{"demo", "line", "--watch", "--terminal-mode", "kitty"}); err == nil {
+		t.Fatal("removed terminal image mode was accepted")
 	}
 }
 
@@ -133,29 +149,14 @@ func TestJSONCanStreamToStdout(t *testing.T) {
 
 func TestOutputSpecificFlagsAreNotSilentlyIgnored(t *testing.T) {
 	tests := []OutputFlags{
-		{Export: "terminal", ImageWidth: 800, TerminalMode: "auto"},
-		{Export: "terminal", TerminalMode: "kitty"},
-		{Export: "png", Width: 80, TerminalMode: "auto"},
-		{Export: "json", ImageHeight: 400, TerminalMode: "auto"},
+		{Export: "terminal", ImageWidth: 800},
+		{Export: "png", Width: 80},
+		{Export: "json", ImageHeight: 400},
 	}
 	for _, flags := range tests {
 		if err := validateOutputFlags(flags); err == nil {
 			t.Fatalf("irrelevant output flags were accepted: %+v", flags)
 		}
-	}
-}
-
-func TestWatchDoesNotAdvertiseUnavailableKittyToggle(t *testing.T) {
-	picture.ForceKittyCapability(picture.KittyCapabilityUnsupported)
-	t.Cleanup(func() { picture.ForceKittyCapability(picture.KittyCapabilityUnknown) })
-	spec, _ := chartmux.Demo("line")
-	chart, err := chartmux.New(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	view := newWatchModel(chart, "auto").View().Content
-	if strings.Contains(view, "g switch presentation") {
-		t.Fatal("watch UI advertised an unavailable Kitty toggle")
 	}
 }
 

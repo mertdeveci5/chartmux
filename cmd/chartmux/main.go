@@ -44,26 +44,26 @@ type DatasetFlags struct {
 }
 
 type AppearanceFlags struct {
-	Title       string `help:"Chart title" placeholder:"TEXT"`
-	Description string `help:"Text below the title" placeholder:"TEXT"`
-	Footer      string `help:"Footer text" placeholder:"TEXT"`
-	HideLegend  bool   `help:"Hide the legend"`
-	HideAxes    bool   `help:"Hide axes and grid lines"`
-	ShowValues  bool   `help:"Show numeric labels; image exports only for graphical charts"`
-	Theme       string `help:"Color theme: light or dark" enum:"light,dark," default:"" placeholder:"THEME"`
+	Title       string   `help:"Chart title" placeholder:"TEXT"`
+	Description string   `help:"Text below the title" placeholder:"TEXT"`
+	Footer      string   `help:"Footer text" placeholder:"TEXT"`
+	Annotation  []string `help:"Narrative annotation; repeat for multiple bottom notes" placeholder:"TEXT"`
+	HideLegend  bool     `help:"Hide the legend"`
+	HideAxes    bool     `help:"Hide axes and grid lines"`
+	ShowValues  bool     `help:"Show numeric labels; image exports only for graphical charts"`
+	Theme       string   `help:"Color theme: light or dark" enum:"light,dark," default:"" placeholder:"THEME"`
 }
 
 type OutputFlags struct {
-	Width        int    `help:"Terminal output width; defaults to terminal width"`
-	Height       int    `help:"Terminal chart height; defaults to 14"`
-	Watch        bool   `help:"Open the responsive terminal UI"`
-	TerminalMode string `help:"Terminal UI presentation: auto, unicode, or kitty" default:"auto" enum:"auto,unicode,kitty" placeholder:"MODE"`
-	Export       string `help:"Output format: terminal, png, svg, html, or json" default:"terminal" enum:"terminal,png,svg,html,json" placeholder:"FORMAT"`
-	Output       string `help:"Output path; use - for stdout" placeholder:"FILE"`
-	Copy         bool   `help:"Copy an exported PNG file to the clipboard"`
-	NoColor      bool   `help:"Disable ANSI color in one-shot terminal output"`
-	ImageWidth   int    `help:"PNG, SVG, or HTML width in pixels"`
-	ImageHeight  int    `help:"PNG, SVG, or HTML height in pixels"`
+	Width       int    `help:"Terminal output width; defaults to terminal width"`
+	Height      int    `help:"Terminal chart height; defaults to 14"`
+	Watch       bool   `help:"Open the responsive native terminal UI"`
+	Export      string `help:"Output format: terminal, png, svg, html, or json" default:"terminal" enum:"terminal,png,svg,html,json" placeholder:"FORMAT"`
+	Output      string `help:"Output path; use - for stdout" placeholder:"FILE"`
+	Copy        bool   `help:"Copy an exported PNG file to the clipboard"`
+	NoColor     bool   `help:"Disable ANSI color in one-shot terminal output"`
+	ImageWidth  int    `help:"PNG, SVG, or HTML width in pixels"`
+	ImageHeight int    `help:"PNG, SVG, or HTML height in pixels"`
 }
 
 type PresentationFlags struct {
@@ -397,7 +397,9 @@ func loadFlexibleSpec(path, x string, series []string, options SpecOptions) (cha
 			return chartmux.Spec{}, err
 		}
 	} else if spec.Type == chartmux.Combo {
-		applyComboMarks(&spec, nil)
+		if err := applyComboMarks(&spec, nil); err != nil {
+			return chartmux.Spec{}, err
+		}
 	}
 	return spec, nil
 }
@@ -438,6 +440,9 @@ func applyAppearanceOverrides(spec *chartmux.Spec, flags AppearanceFlags) {
 	if flags.Footer != "" {
 		spec.Footer = flags.Footer
 	}
+	for _, text := range flags.Annotation {
+		spec.Annotations = append(spec.Annotations, chartmux.Annotation{Text: text})
+	}
 	if flags.HideLegend {
 		spec.Legend = &chartmux.DisplaySpec{Show: false}
 	}
@@ -472,7 +477,7 @@ func present(chart *chartmux.Chart, flags PresentationFlags, stdout io.Writer) e
 			if flags.Output != "" {
 				return fmt.Errorf("--output cannot be combined with --watch")
 			}
-			return watch(chart, flags.TerminalMode)
+			return watch(chart)
 		}
 		width, _ := terminalSize()
 		if flags.Width > 0 {
@@ -545,10 +550,6 @@ func present(chart *chartmux.Chart, flags PresentationFlags, stdout io.Writer) e
 }
 
 func validateOutputFlags(flags OutputFlags) error {
-	terminalMode := flags.TerminalMode
-	if terminalMode == "" {
-		terminalMode = "auto"
-	}
 	if flags.Export == "terminal" {
 		if flags.ImageWidth != 0 || flags.ImageHeight != 0 {
 			return fmt.Errorf("--image-width and --image-height require --export png, svg, or html")
@@ -556,16 +557,10 @@ func validateOutputFlags(flags OutputFlags) error {
 		if flags.Watch && flags.NoColor {
 			return fmt.Errorf("--no-color cannot be combined with --watch")
 		}
-		if !flags.Watch && terminalMode != "auto" {
-			return fmt.Errorf("--terminal-mode requires --watch")
-		}
 		return nil
 	}
 	if flags.Width != 0 || flags.Height != 0 {
 		return fmt.Errorf("--width and --height require --export terminal")
-	}
-	if terminalMode != "auto" {
-		return fmt.Errorf("--terminal-mode requires --watch")
 	}
 	if flags.NoColor {
 		return fmt.Errorf("--no-color requires --export terminal")

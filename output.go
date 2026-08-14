@@ -93,6 +93,7 @@ func (chart *Chart) WriteHTML(writer io.Writer, options HTMLOptions) error {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="%s">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
 <title>%s</title>
 <style>
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:clamp(12px,4vw,48px);background:%s;color:%s;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.chart-card{width:min(100%%,1120px);padding:clamp(12px,2vw,24px);overflow:hidden;background:%s;border:1px solid %s;border-radius:18px;box-shadow:0 18px 50px %s}.chart-card svg{display:block;width:100%%;height:auto}@media(max-width:560px){body{padding:8px;place-items:start center}.chart-card{padding:8px;border-radius:12px}}
@@ -118,25 +119,49 @@ func (chart *Chart) PNG(options ImageOptions) ([]byte, error) {
 }
 
 func (chart *Chart) bytes(format string, width, height int) ([]byte, error) {
-	theme, err := chart.theme()
+	renderChart := chart.cloneForRender()
+	if format == charts.ChartOutputSVG {
+		renderChart = renderChart.escapedForSVG()
+	}
+	renderChart.spec.Title = ""
+	renderChart.spec.Description = ""
+	renderChart.spec.Footer = ""
+	renderChart.spec.Annotations = nil
+	theme, err := renderChart.theme()
 	if err != nil {
 		return nil, err
 	}
-	if chart.spec.Type == Combo {
-		option := chart.comboOption(theme, width, height, format)
-		painter, err := charts.Render(option)
-		if err != nil {
-			return nil, fmt.Errorf("build combo chart: %w", err)
-		}
-		return painter.Bytes()
-	}
-	painter := charts.NewPainter(charts.PainterOptions{
+	measurementPainter := charts.NewPainter(charts.PainterOptions{
 		OutputFormat: format,
 		Width:        width,
 		Height:       height,
 		Theme:        theme,
 	})
-	if err := chart.draw(painter, theme); err != nil {
+	textLayout, err := chart.graphicalTextLayout(measurementPainter, theme, width, height)
+	if err != nil {
+		return nil, err
+	}
+	if renderChart.spec.Type == Combo {
+		option := renderChart.comboOption(theme, width, height, format)
+		option.Box = textLayout.plotBox(width, height)
+		painter, err := charts.Render(option)
+		if err != nil {
+			return nil, fmt.Errorf("build combo chart: %w", err)
+		}
+		if textLayout.topHeight > 0 {
+			painter.FilledRect(0, -textLayout.topHeight, width, 0, theme.GetBackgroundColor(), charts.ColorTransparent, 0)
+		}
+		if textLayout.bottomHeight > 0 {
+			painter.FilledRect(0, painter.Height(), width, height-textLayout.topHeight, theme.GetBackgroundColor(), charts.ColorTransparent, 0)
+		}
+		chart.drawGraphicalText(painter, textLayout, theme, format == charts.ChartOutputSVG, width, height, textLayout.topHeight)
+		return painter.Bytes()
+	}
+	painter := measurementPainter
+	painter.FilledRect(0, 0, width, height, theme.GetBackgroundColor(), charts.ColorTransparent, 0)
+	chart.drawGraphicalText(painter, textLayout, theme, format == charts.ChartOutputSVG, width, height, 0)
+	plotPainter := painter.Child(charts.PainterBoxOption(textLayout.plotBox(width, height)))
+	if err := renderChart.draw(plotPainter, theme); err != nil {
 		return nil, err
 	}
 	content, err := painter.Bytes()
@@ -147,7 +172,7 @@ func (chart *Chart) bytes(format string, width, height int) ([]byte, error) {
 }
 
 func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) error {
-	title := charts.TitleOption{Text: chart.spec.Title, Subtext: chart.spec.Description}
+	title := charts.TitleOption{}
 	legend := charts.LegendOption{Show: charts.Ptr(displayValue(chart.spec.Legend, len(chart.series) > 1)), SeriesNames: chart.seriesNames()}
 	showAxes := displayValue(chart.spec.Axes, true)
 	showLabels := displayValue(chart.spec.Labels, false)
@@ -202,23 +227,7 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 		}
 		return painter.LineChart(option)
 	case Scatter:
-		points := make([][][]float64, len(values))
-		for seriesIndex, series := range values {
-			points[seriesIndex] = make([][]float64, len(series))
-			for pointIndex, value := range series {
-				points[seriesIndex][pointIndex] = []float64{value}
-			}
-		}
-		series := charts.NewSeriesListScatterMultiValue(points, charts.ScatterSeriesOption{Names: chart.seriesNames(), Label: label})
-		option := charts.NewScatterChartOptionWithSeries(series)
-		option.Theme = theme
-		option.Title = title
-		option.Legend = legend
-		option.XAxis.Labels = chart.labels
-		option.XAxis.Show = charts.Ptr(showAxes)
-		option.YAxis[0].Show = charts.Ptr(showAxes)
-		option.Symbol = charts.Symbol{Shape: charts.SymbolCircle, Size: 3}
-		return painter.ScatterChart(option)
+		return chart.drawScatter(painter, theme, showAxes, showLabels)
 	case Pie:
 		series := charts.NewSeriesListPie(values[0], charts.PieSeriesOption{Names: chart.labels, Label: label})
 		option := charts.PieChartOption{
@@ -248,21 +257,20 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 		}
 		option := charts.NewHeatMapOptionWithData(rows)
 		option.Theme = theme
+		if !showAxes {
+			option.Theme = theme.
+				WithXAxisColor(charts.ColorTransparent).
+				WithYAxisColor(charts.ColorTransparent).
+				WithXAxisTextColor(charts.ColorTransparent).
+				WithYAxisTextColor(charts.ColorTransparent)
+		}
 		option.Title = title
 		option.XAxis.Labels = chart.seriesNames()
 		option.YAxis.Labels = chart.labels
 		option.ValuesLabel = label
 		return painter.HeatMapChart(option)
 	case Radar:
-		maxima := make([]float64, len(chart.labels))
-		for pointIndex := range maxima {
-			maxima[pointIndex] = chart.spec.Max
-			if maxima[pointIndex] == 0 {
-				for seriesIndex := range chart.series {
-					maxima[pointIndex] = math.Max(maxima[pointIndex], chart.series[seriesIndex].values[pointIndex])
-				}
-			}
-		}
+		maxima := chart.radarMaxima()
 		series := charts.NewSeriesListRadar(values, charts.RadarSeriesOption{Names: chart.seriesNames(), Label: label})
 		option := charts.RadarChartOption{
 			Theme:           theme,
@@ -288,12 +296,13 @@ func (chart *Chart) draw(painter *charts.Painter, theme charts.ColorPalette) err
 
 func (chart *Chart) comboOption(theme charts.ColorPalette, width, height int, format string) charts.ChartOption {
 	series := make(charts.GenericSeriesList, len(chart.series))
+	label := charts.SeriesLabel{Show: charts.Ptr(displayValue(chart.spec.Labels, false))}
 	for index, item := range chart.series {
 		chartType := charts.ChartTypeLine
 		if item.spec.Mark == MarkBar {
 			chartType = charts.ChartTypeBar
 		}
-		series[index] = charts.GenericSeries{Type: chartType, Values: item.values, Name: item.spec.Label}
+		series[index] = charts.GenericSeries{Type: chartType, Values: item.values, Name: item.spec.Label, Label: label}
 	}
 	showAxes := displayValue(chart.spec.Axes, true)
 	option := charts.ChartOption{
@@ -301,7 +310,7 @@ func (chart *Chart) comboOption(theme charts.ColorPalette, width, height int, fo
 		Width:           width,
 		Height:          height,
 		Theme:           theme,
-		Title:           charts.TitleOption{Text: chart.spec.Title, Subtext: chart.spec.Description},
+		Title:           charts.TitleOption{},
 		Legend:          charts.LegendOption{Show: charts.Ptr(displayValue(chart.spec.Legend, true)), SeriesNames: chart.seriesNames()},
 		XAxis:           charts.XAxisOption{Show: charts.Ptr(showAxes), Labels: chart.labels},
 		YAxis:           []charts.YAxisOption{{Show: charts.Ptr(showAxes), PreferNiceIntervals: charts.Ptr(true)}},
@@ -312,6 +321,180 @@ func (chart *Chart) comboOption(theme charts.ColorPalette, width, height int, fo
 		option.YAxis[0].Min = charts.Ptr(0.0)
 	}
 	return option
+}
+
+func (chart *Chart) drawScatter(painter *charts.Painter, theme charts.ColorPalette, showAxes, showLabels bool) error {
+	if len(chart.xValues) == 0 {
+		return fmt.Errorf("scatter chart has no x values")
+	}
+
+	textStyle := charts.NewFontStyleWithSize(11).WithColor(theme.GetLabelTextColor())
+	mutedStyle := charts.NewFontStyleWithSize(10).WithColor(theme.GetXAxisTextColor())
+	top := 16
+
+	bottomPadding := 18
+	if showAxes {
+		bottomPadding += 28
+	}
+	showLegend := displayValue(chart.spec.Legend, len(chart.series) > 1)
+	legendRows := 0
+	if showLegend {
+		legendRows = chart.scatterLegendRows(painter, textStyle, max(1, painter.Width()-86))
+		bottomPadding += legendRows * 20
+	}
+	left := 20
+	if showAxes {
+		left = 62
+	}
+	right := painter.Width() - 24
+	bottom := painter.Height() - bottomPadding
+	if right-left < 40 || bottom-top < 40 {
+		return fmt.Errorf("image is too small for scatter chart")
+	}
+
+	minX, maxX := chart.xValues[0], chart.xValues[0]
+	minY, maxY := chart.valueRange(nil)
+	for _, value := range chart.xValues[1:] {
+		minX = math.Min(minX, value)
+		maxX = math.Max(maxX, value)
+	}
+	minX, maxX = paddedRange(minX, maxX)
+	minY, maxY = paddedRange(minY, maxY)
+	mapX := func(value float64) int {
+		return left + int(math.Round((value-minX)/(maxX-minX)*float64(right-left)))
+	}
+	mapY := func(value float64) int {
+		return bottom - int(math.Round((value-minY)/(maxY-minY)*float64(bottom-top)))
+	}
+
+	if showAxes {
+		axisColor := theme.GetXAxisStrokeColor()
+		gridColor := theme.GetAxisSplitLineColor()
+		painter.LineStroke([]charts.Point{{X: left, Y: top}, {X: left, Y: bottom}, {X: right, Y: bottom}}, axisColor, 1)
+		for index := 0; index < 5; index++ {
+			ratio := float64(index) / 4
+			xValue := minX + (maxX-minX)*ratio
+			yValue := minY + (maxY-minY)*ratio
+			x := mapX(xValue)
+			y := mapY(yValue)
+			painter.LineStroke([]charts.Point{{X: left, Y: y}, {X: right, Y: y}}, gridColor, 0.5)
+			xLabel := formatValue(xValue)
+			xLabelWidth := painter.MeasureText(xLabel, 0, mutedStyle).Width()
+			xLabelX := min(right-xLabelWidth, max(left, x-(xLabelWidth>>1)))
+			painter.Text(xLabel, xLabelX, bottom+18, 0, mutedStyle)
+			yLabel := formatValue(yValue)
+			yLabelWidth := painter.MeasureText(yLabel, 0, mutedStyle).Width()
+			painter.Text(yLabel, max(0, left-yLabelWidth-8), y+4, 0, mutedStyle)
+		}
+	}
+
+	var labelBoxes []charts.Box
+	for seriesIndex, series := range chart.series {
+		color := theme.GetSeriesColor(seriesIndex)
+		for pointIndex, value := range series.values {
+			if value == math.MaxFloat64 {
+				continue
+			}
+			x := mapX(chart.xValues[pointIndex])
+			y := mapY(value)
+			painter.Circle(4, x, y, color, color, 1)
+			if showLabels {
+				text := formatValue(value)
+				textBox := painter.MeasureText(text, 0, textStyle)
+				candidates := []charts.Box{
+					charts.NewBox(x+7, y-textBox.Height(), x+7+textBox.Width(), y),
+					charts.NewBox(x-textBox.Width()-7, y-textBox.Height(), x-7, y),
+					charts.NewBox(x+7, y+4, x+7+textBox.Width(), y+4+textBox.Height()),
+				}
+				for _, box := range candidates {
+					if box.Left < left || box.Right > right || box.Top < top || box.Bottom > bottom || overlapsAny(box, labelBoxes) {
+						continue
+					}
+					painter.Text(text, box.Left, box.Bottom, 0, textStyle)
+					labelBoxes = append(labelBoxes, box)
+					break
+				}
+			}
+		}
+	}
+
+	if showLegend {
+		x := left
+		y := painter.Height() - (legendRows-1)*20 - 8
+		for seriesIndex, series := range chart.series {
+			itemWidth := painter.MeasureText(series.spec.Label, 0, textStyle).Width() + 34
+			if x > left && x+itemWidth > right {
+				x = left
+				y += 20
+			}
+			color := theme.GetSeriesColor(seriesIndex)
+			painter.Circle(3, x, y-4, color, color, 1)
+			painter.Text(series.spec.Label, x+8, y, 0, textStyle)
+			x += itemWidth
+		}
+	}
+	return nil
+}
+
+func (chart *Chart) scatterLegendRows(painter *charts.Painter, style charts.FontStyle, width int) int {
+	rows := 1
+	used := 0
+	for _, series := range chart.series {
+		itemWidth := painter.MeasureText(series.spec.Label, 0, style).Width() + 34
+		if used > 0 && used+itemWidth > width {
+			rows++
+			used = 0
+		}
+		used += itemWidth
+	}
+	return rows
+}
+
+func overlapsAny(candidate charts.Box, existing []charts.Box) bool {
+	for _, box := range existing {
+		if candidate.Left < box.Right && candidate.Right > box.Left && candidate.Top < box.Bottom && candidate.Bottom > box.Top {
+			return true
+		}
+	}
+	return false
+}
+
+func paddedRange(minimum, maximum float64) (float64, float64) {
+	if minimum == maximum {
+		return minimum - 1, maximum + 1
+	}
+	padding := (maximum - minimum) * 0.05
+	return minimum - padding, maximum + padding
+}
+
+func (chart *Chart) escapedForSVG() *Chart {
+	clone := chart.cloneForRender()
+	clone.spec.Title = html.EscapeString(chart.spec.Title)
+	clone.spec.Description = html.EscapeString(chart.spec.Description)
+	clone.spec.Footer = html.EscapeString(chart.spec.Footer)
+	clone.labels = make([]string, len(chart.labels))
+	for index, label := range chart.labels {
+		clone.labels[index] = html.EscapeString(label)
+	}
+	clone.series = make([]compiledSeries, len(chart.series))
+	for index, series := range chart.series {
+		clone.series[index] = series
+		clone.series[index].spec.Label = html.EscapeString(series.spec.Label)
+	}
+	return clone
+}
+
+func (chart *Chart) cloneForRender() *Chart {
+	clone := *chart
+	clone.spec = cloneSpec(chart.spec)
+	clone.labels = append([]string(nil), chart.labels...)
+	clone.xValues = append([]float64(nil), chart.xValues...)
+	clone.series = make([]compiledSeries, len(chart.series))
+	for index, series := range chart.series {
+		clone.series[index] = series
+		clone.series[index].values = append([]float64(nil), series.values...)
+	}
+	return &clone
 }
 
 func (chart *Chart) theme() (charts.ColorPalette, error) {
@@ -364,12 +547,32 @@ func (chart *Chart) seriesValues() [][]float64 {
 func (chart *Chart) allNonNegative() bool {
 	for _, series := range chart.series {
 		for _, value := range series.values {
-			if value != math.MaxFloat64 && value < 0 {
+			if !isMissing(value) && value < 0 {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+func (chart *Chart) radarMaxima() []float64 {
+	maxima := make([]float64, len(chart.labels))
+	for pointIndex := range maxima {
+		maxima[pointIndex] = chart.spec.Max
+		if maxima[pointIndex] > 0 {
+			continue
+		}
+		for seriesIndex := range chart.series {
+			value := chart.series[seriesIndex].values[pointIndex]
+			if !isMissing(value) {
+				maxima[pointIndex] = math.Max(maxima[pointIndex], value)
+			}
+		}
+		if maxima[pointIndex] <= 0 {
+			maxima[pointIndex] = 1
+		}
+	}
+	return maxima
 }
 
 func imageDimensions(options ImageOptions, defaultWidth, defaultHeight int) (int, int, error) {
