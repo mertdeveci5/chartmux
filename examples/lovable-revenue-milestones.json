@@ -1,0 +1,51 @@
+{
+  "$schema": "https://chartmux.dev/schema/v1.json",
+  "version": 1,
+  "type": "bar",
+  "title": "Lovable's public revenue milestones",
+  "description": "First traceable disclosure date · USD millions · Dec 2024–Jun 2026",
+  "footer": "Company-reported ARR / annualized run rate. Dates are disclosure dates, not necessarily dates reached; intervals are categorical.",
+  "xAxis": {
+    "dataKey": "date",
+    "kind": "category"
+  },
+  "series": [
+    {
+      "dataKey": "runRate",
+      "label": "Annualized revenue run rate ($M)",
+      "color": "#ff6b7a"
+    }
+  ],
+  "layout": "grouped",
+  "orientation": "horizontal",
+  "legend": {
+    "show": false
+  },
+  "axes": {
+    "show": true
+  },
+  "labels": {
+    "show": true
+  },
+  "theme": "dark",
+  "data": [
+    { "date": "02 Dec '24", "runRate": 1 },
+    { "date": "21 Dec '24", "runRate": 4 },
+    { "date": "28 Jan '25", "runRate": 10 },
+    { "date": "25 Feb '25", "runRate": 17 },
+    { "date": "11 Mar '25", "runRate": 20 },
+    { "date": "02 Apr '25", "runRate": 30 },
+    { "date": "17 Apr '25", "runRate": 40 },
+    { "date": "15 May '25", "runRate": 50 },
+    { "date": "31 May '25", "runRate": 60 },
+    { "date": "19 Jun '25", "runRate": 75 },
+    { "date": "28 Jun '25", "runRate": 80 },
+    { "date": "23 Jul '25", "runRate": 100 },
+    { "date": "18 Aug '25", "runRate": 120 },
+    { "date": "11 Sep '25", "runRate": 130 },
+    { "date": "18 Nov '25", "runRate": 200 },
+    { "date": "29 Jan '26", "runRate": 300 },
+    { "date": "11 Mar '26", "runRate": 400 },
+    { "date": "09 Jun '26", "runRate": 500 }
+  ]
+}
