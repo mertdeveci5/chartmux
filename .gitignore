@@ -6,3 +6,8 @@
 /npm/vendor/*
 !/npm/vendor/.gitkeep
 /npm/LICENSE
+
+# Local visual QA and research outputs
+/artifacts/
+/research/
+/chartmux-command-reference.html

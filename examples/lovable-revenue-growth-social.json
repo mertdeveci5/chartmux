@@ -1,0 +1,49 @@
+{
+  "$schema": "https://chartmux.dev/schema/v1.json",
+  "version": 1,
+  "type": "combo",
+  "title": "Lovable's revenue hypergrowth",
+  "description": "Bars: ARR / run rate ($M) · Line: monthly-equivalent growth (%)",
+  "footer": "Selected public disclosures · Growth normalized to 30 days · Source chronology in research note",
+  "xAxis": {
+    "dataKey": "date",
+    "kind": "category"
+  },
+  "series": [
+    {
+      "dataKey": "runRate",
+      "label": "ARR / run rate ($M)",
+      "color": "#ff6b7a",
+      "mark": "bar"
+    },
+    {
+      "dataKey": "monthlyGrowth",
+      "label": "Monthly-equivalent growth (%)",
+      "color": "#4dd6e8",
+      "mark": "line"
+    }
+  ],
+  "legend": {
+    "show": true
+  },
+  "axes": {
+    "show": true
+  },
+  "labels": {
+    "show": true
+  },
+  "theme": "dark",
+  "data": [
+    { "date": "Dec '24", "runRate": 1, "monthlyGrowth": null },
+    { "date": "Jan '25", "runRate": 10, "monthlyGrowth": 236 },
+    { "date": "Mar '25", "runRate": 20, "monthlyGrowth": 64.1 },
+    { "date": "Apr '25", "runRate": 40, "monthlyGrowth": 75.4 },
+    { "date": "May '25", "runRate": 60, "monthlyGrowth": 31.8 },
+    { "date": "Jul '25", "runRate": 100, "monthlyGrowth": 33.5 },
+    { "date": "Sep '25", "runRate": 130, "monthlyGrowth": 17 },
+    { "date": "Nov '25", "runRate": 200, "monthlyGrowth": 20.9 },
+    { "date": "Jan '26", "runRate": 300, "monthlyGrowth": 18.4 },
+    { "date": "Mar '26", "runRate": 400, "monthlyGrowth": 23.4 },
+    { "date": "Jun '26", "runRate": 500, "monthlyGrowth": 7.7 }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://chartmux.dev/schema/v1.json",
+  "version": 1,
+  "type": "combo",
+  "title": "Lovable: revenue and growth between disclosures",
+  "description": "Bars: ARR / run rate ($M) · Line: increase vs previous disclosure (%) · Shared numeric scale",
+  "footer": "Growth = (current / previous - 1) × 100. Disclosure intervals vary, so this is not monthly or annual growth.",
+  "xAxis": {
+    "dataKey": "date",
+    "kind": "category"
+  },
+  "series": [
+    {
+      "dataKey": "runRate",
+      "label": "ARR / run rate ($M)",
+      "color": "#ff6b7a",
+      "mark": "bar"
+    },
+    {
+      "dataKey": "growth",
+      "label": "Growth vs prior disclosure (%)",
+      "color": "#4dd6e8",
+      "mark": "line"
+    }
+  ],
+  "legend": {
+    "show": true
+  },
+  "axes": {
+    "show": true
+  },
+  "labels": {
+    "show": true
+  },
+  "theme": "dark",
+  "data": [
+    { "date": "02 Dec '24", "runRate": 1, "growth": null },
+    { "date": "21 Dec '24", "runRate": 4, "growth": 300 },
+    { "date": "28 Jan '25", "runRate": 10, "growth": 150 },
+    { "date": "25 Feb '25", "runRate": 17, "growth": 70 },
+    { "date": "11 Mar '25", "runRate": 20, "growth": 17.6 },
+    { "date": "02 Apr '25", "runRate": 30, "growth": 50 },
+    { "date": "17 Apr '25", "runRate": 40, "growth": 33.3 },
+    { "date": "15 May '25", "runRate": 50, "growth": 25 },
+    { "date": "31 May '25", "runRate": 60, "growth": 20 },
+    { "date": "19 Jun '25", "runRate": 75, "growth": 25 },
+    { "date": "28 Jun '25", "runRate": 80, "growth": 6.7 },
+    { "date": "23 Jul '25", "runRate": 100, "growth": 25 },
+    { "date": "18 Aug '25", "runRate": 120, "growth": 20 },
+    { "date": "11 Sep '25", "runRate": 130, "growth": 8.3 },
+    { "date": "18 Nov '25", "runRate": 200, "growth": 53.8 },
+    { "date": "29 Jan '26", "runRate": 300, "growth": 50 },
+    { "date": "11 Mar '26", "runRate": 400, "growth": 33.3 },
+    { "date": "09 Jun '26", "runRate": 500, "growth": 25 }
+  ]
+}

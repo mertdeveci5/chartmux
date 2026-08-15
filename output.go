@@ -396,33 +396,32 @@ func (chart *Chart) drawScatter(painter *charts.Painter, theme charts.ColorPalet
 		minX = math.Min(minX, value)
 		maxX = math.Max(maxX, value)
 	}
-	minX, maxX = paddedRange(minX, maxX)
-	minY, maxY = paddedRange(minY, maxY)
+	xAxis := newGraphicalValueAxisWithIntervals(minX, maxX, 4, false)
+	yAxis := newGraphicalValueAxisWithIntervals(minY, maxY, 4, false)
 	mapX := func(value float64) int {
-		return left + int(math.Round((value-minX)/(maxX-minX)*float64(right-left)))
+		return left + int(math.Round((value-xAxis.minimum)/(xAxis.maximum-xAxis.minimum)*float64(right-left)))
 	}
 	mapY := func(value float64) int {
-		return bottom - int(math.Round((value-minY)/(maxY-minY)*float64(bottom-top)))
+		return bottom - int(math.Round((value-yAxis.minimum)/(yAxis.maximum-yAxis.minimum)*float64(bottom-top)))
 	}
 
 	if showAxes {
 		axisColor := theme.GetXAxisStrokeColor()
 		gridColor := theme.GetAxisSplitLineColor()
 		painter.LineStroke([]charts.Point{{X: left, Y: top}, {X: left, Y: bottom}, {X: right, Y: bottom}}, axisColor, 1)
-		for index := 0; index < 5; index++ {
-			ratio := float64(index) / 4
-			xValue := minX + (maxX-minX)*ratio
-			yValue := minY + (maxY-minY)*ratio
-			x := mapX(xValue)
+		for _, yValue := range yAxis.ticks() {
 			y := mapY(yValue)
 			painter.LineStroke([]charts.Point{{X: left, Y: y}, {X: right, Y: y}}, gridColor, 0.5)
+			yLabel := formatValue(yValue)
+			yLabelWidth := painter.MeasureText(yLabel, 0, mutedStyle).Width()
+			painter.Text(yLabel, max(0, left-yLabelWidth-8), y+4, 0, mutedStyle)
+		}
+		for _, xValue := range xAxis.ticks() {
+			x := mapX(xValue)
 			xLabel := formatValue(xValue)
 			xLabelWidth := painter.MeasureText(xLabel, 0, mutedStyle).Width()
 			xLabelX := min(right-xLabelWidth, max(left, x-(xLabelWidth>>1)))
 			painter.Text(xLabel, xLabelX, bottom+18, 0, mutedStyle)
-			yLabel := formatValue(yValue)
-			yLabelWidth := painter.MeasureText(yLabel, 0, mutedStyle).Width()
-			painter.Text(yLabel, max(0, left-yLabelWidth-8), y+4, 0, mutedStyle)
 		}
 	}
 
@@ -435,7 +434,7 @@ func (chart *Chart) drawScatter(painter *charts.Painter, theme charts.ColorPalet
 			}
 			x := mapX(chart.xValues[pointIndex])
 			y := mapY(value)
-			painter.Circle(4, x, y, color, color, 1)
+			painter.Circle(5, x, y, color, color, 1)
 			if showLabels {
 				text := formatValue(value)
 				textBox := painter.MeasureText(text, 0, textStyle)
@@ -497,14 +496,6 @@ func overlapsAny(candidate charts.Box, existing []charts.Box) bool {
 	return false
 }
 
-func paddedRange(minimum, maximum float64) (float64, float64) {
-	if minimum == maximum {
-		return minimum - 1, maximum + 1
-	}
-	padding := (maximum - minimum) * 0.05
-	return minimum - padding, maximum + padding
-}
-
 func (chart *Chart) escapedForSVG() *Chart {
 	clone := chart.cloneForRender()
 	clone.spec.Title = html.EscapeString(chart.spec.Title)
@@ -536,9 +527,17 @@ func (chart *Chart) cloneForRender() *Chart {
 }
 
 func (chart *Chart) theme() (charts.ColorPalette, error) {
-	colors := make([]charts.Color, len(chart.series))
-	for index, series := range chart.series {
-		color, err := colorHex(series.spec.Color)
+	colorCount := len(chart.series)
+	if chart.spec.Type == Pie || chart.spec.Type == Donut {
+		colorCount = max(colorCount, len(chart.labels))
+	}
+	colors := make([]charts.Color, colorCount)
+	for index := range colors {
+		value := defaultColors[index%len(defaultColors)]
+		if index < len(chart.series) {
+			value = chart.series[index].spec.Color
+		}
+		color, err := colorHex(value)
 		if err != nil {
 			return nil, err
 		}

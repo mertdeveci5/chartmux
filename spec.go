@@ -595,4 +595,4 @@ func humanize(value string) string {
 	return strings.ToUpper(value[:1]) + value[1:]
 }
 
-var defaultColors = []string{"#2563EB", "#60A5FA", "#34D399", "#F59E0B", "#F87171", "#A78BFA"}
+var defaultColors = []string{"#7367F0", "#3FC5D8", "#F59E0B", "#F472B6", "#34D399", "#A78BFA"}

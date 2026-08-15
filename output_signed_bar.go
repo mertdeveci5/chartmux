@@ -57,6 +57,10 @@ func (chart *Chart) graphicalBarExtent() (float64, float64) {
 }
 
 func newGraphicalValueAxis(minimum, maximum float64, padForLabels bool) graphicalValueAxis {
+	return newGraphicalValueAxisWithIntervals(minimum, maximum, 6, padForLabels)
+}
+
+func newGraphicalValueAxisWithIntervals(minimum, maximum float64, intervals int, padForLabels bool) graphicalValueAxis {
 	if minimum == maximum {
 		if minimum == 0 {
 			minimum, maximum = -1, 1
@@ -66,7 +70,7 @@ func newGraphicalValueAxis(minimum, maximum float64, padForLabels bool) graphica
 			maximum += padding
 		}
 	}
-	rawStep := (maximum - minimum) / 6
+	rawStep := (maximum - minimum) / float64(max(1, intervals))
 	magnitude := math.Pow(10, math.Floor(math.Log10(rawStep)))
 	fraction := rawStep / magnitude
 	niceFraction := 1.0

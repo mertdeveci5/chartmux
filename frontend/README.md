@@ -1,10 +1,16 @@
 # Chartmux frontend
 
-Full-screen terminal-style chart gallery built with React, Vite, Recharts, and the Cloudflare Vite plugin. The interface mirrors the demos available through the Chartmux Go CLI while using responsive SVG previews in the browser.
+React gallery for the real Chartmux package output. Every preview in `public/demos` is emitted by the terminal renderer, so the website stays visually faithful to the CLI instead of redrawing charts in the browser.
 
 ```bash
 npm install
 npm run dev
+```
+
+Regenerate the checked-in ANSI previews after changing the renderer or built-in demo data:
+
+```bash
+npm run generate:demos
 ```
 
 Vite prints the local URL, normally `http://localhost:5173`.

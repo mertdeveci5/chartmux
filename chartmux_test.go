@@ -635,7 +635,7 @@ func TestGraphicalSignedBarsDoNotDrawZeroAsAFullBar(t *testing.T) {
 	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
 		t.Fatal(err)
 	}
-	if count := strings.Count(output.String(), "stroke:none;fill:rgb(37,99,235)"); count != 5 {
+	if count := strings.Count(output.String(), "stroke:none;fill:rgb(115,103,240)"); count != 5 {
 		t.Fatalf("signed bar SVG contains %d filled bars, want five non-zero values:\n%s", count, output.String())
 	}
 }
@@ -846,6 +846,33 @@ func TestGraphicalDonutSuppressesCollidingTinySliceLabels(t *testing.T) {
 	}
 }
 
+func TestGraphicalPieUsesDistinctCategoricalColors(t *testing.T) {
+	spec, err := Demo("pie")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 800, Height: 480}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	for _, color := range []string{
+		"rgb(115,103,240)",
+		"rgb(63,197,216)",
+		"rgb(245,158,11)",
+		"rgb(244,114,182)",
+		"rgb(52,211,153)",
+	} {
+		if !strings.Contains(svg, color) {
+			t.Fatalf("pie SVG is missing categorical color %s:\n%s", color, svg)
+		}
+	}
+}
+
 func TestGraphicalFunnelKeepsExtremeStagesVisibleAndExact(t *testing.T) {
 	spec := Spec{
 		Version: SpecVersion,
@@ -943,6 +970,9 @@ func TestScatterUsesNumericXValues(t *testing.T) {
 	if firstGap <= 0 || secondGap < firstGap*5 {
 		t.Fatalf("scatter x positions are not proportional: %v", positions)
 	}
+	if count := strings.Count(svg.String(), `r="5"`); count != len(spec.Data) {
+		t.Fatalf("scatter SVG has %d legible point radii, want %d:\n%s", count, len(spec.Data), svg.String())
+	}
 
 	terminal, err := chart.Terminal(TerminalOptions{Width: 84, Height: 14})
 	if err != nil {
@@ -950,6 +980,32 @@ func TestScatterUsesNumericXValues(t *testing.T) {
 	}
 	if strings.Count(ansi.Strip(terminal), "●") != 3 {
 		t.Fatalf("terminal scatter did not render three independent points:\n%s", terminal)
+	}
+}
+
+func TestGraphicalScatterUsesReadableTicks(t *testing.T) {
+	spec, err := Demo("scatter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chart, err := New(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := chart.WriteSVG(&output, ImageOptions{Width: 960, Height: 540}); err != nil {
+		t.Fatal(err)
+	}
+	svg := output.String()
+	for _, tick := range []string{"0", "2", "4", "6", "8", "10", "12.5"} {
+		if !strings.Contains(svg, ">"+tick+"</text>") {
+			t.Fatalf("scatter SVG is missing readable tick %q:\n%s", tick, svg)
+		}
+	}
+	for _, noisyTick := range []string{"0.6", "2.8", "4.2", "7.2", "9.4"} {
+		if strings.Contains(svg, ">"+noisyTick+"</text>") {
+			t.Fatalf("scatter SVG contains padded fractional tick %q:\n%s", noisyTick, svg)
+		}
 	}
 }
 
@@ -1671,7 +1727,7 @@ func TestTerminalSeriesRemainDistinctWithoutColor(t *testing.T) {
 
 func TestTerminalColorResolvesChartPaletteTokens(t *testing.T) {
 	r, g, b, a := terminalColor("var(--chart-2)").RGBA()
-	if r != 0x6060 || g != 0xA5A5 || b != 0xFAFA || a != 0xFFFF {
+	if r != 0x3F3F || g != 0xC5C5 || b != 0xD8D8 || a != 0xFFFF {
 		t.Fatalf("terminal palette color = #%04X%04X%04X alpha %04X", r, g, b, a)
 	}
 }

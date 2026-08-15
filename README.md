@@ -64,7 +64,7 @@ Add collision-safe narrative notes from the CLI. Repeat `--annotation` to add mo
 Saved chart specs can place an annotation above or below the plot and optionally tie its context to a zero-based data row and series key:
 
 ```json
-{"text":"Mobile mix expanded","position":"top","dataIndex":5,"series":"mobile","color":"#60A5FA"}
+{"text":"Mobile mix expanded","position":"top","dataIndex":5,"series":"mobile","color":"#3FC5D8"}
 ```
 
 ## Use your own data
@@ -138,7 +138,7 @@ Saved files are strict, versioned JSON. Unknown fields fail early instead of bei
   "xAxis": { "dataKey": "month", "kind": "category" },
   "series": [
     { "dataKey": "desktop", "label": "Desktop", "color": "var(--chart-1)" },
-    { "dataKey": "mobile", "label": "Mobile", "color": "#60A5FA" }
+    { "dataKey": "mobile", "label": "Mobile", "color": "#3FC5D8" }
   ],
   "curve": "smooth",
   "data": [
@@ -179,7 +179,7 @@ The previous implicit demos, `hbar`, `gauge`, and `--stacked` paths were removed
 
 ## Frontend playground
 
-The terminal-inspired React/Vite playground lives in [`frontend`](frontend). It uses smooth SVG charts in the browser and the official Cloudflare Vite plugin for Workers deployment.
+The React/Vite gallery lives in [`frontend`](frontend). Its chart previews are truecolor ANSI captures from the real terminal renderer, not browser-drawn approximations. The surrounding interface uses the official Cloudflare Vite plugin for Workers deployment.
 
 ```bash
 cd frontend

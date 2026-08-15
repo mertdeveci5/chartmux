@@ -1,263 +1,456 @@
+import {
+  CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  GithubIcon,
+  Maximize2Icon,
+  PackageIcon,
+  XIcon,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChartPreview, demos, type DemoId } from "./charts";
+import { demos, type DemoId } from "./demos";
 
 type ExportFormat = "terminal" | "png" | "svg" | "html";
 
+const repositoryUrl = "https://github.com/mertdeveci5/chartmux";
+const installCommand = "brew install mertdeveci5/tap/chartmux";
+
+const installOptions = [
+  {
+    description: "Install the native binary through the Homebrew tap.",
+    label: "Homebrew",
+    value: installCommand,
+  },
+  {
+    description: "Install the platform wrapper globally with npm.",
+    label: "npm",
+    value: "npm install --global chartmux",
+  },
+  {
+    description: "Build and install the latest command directly from Go.",
+    label: "Go",
+    value: "go install github.com/mertdeveci5/chartmux/cmd/chartmux@latest",
+  },
+] as const;
+
+function demoAsset(id: DemoId) {
+  return `/demos/${id}.ansi.txt`;
+}
+
 function chartCommand(demo: DemoId, format: ExportFormat) {
-  if (format === "terminal") {
-    return `chartmux demo ${demo} --watch`;
-  }
-  return `chartmux demo ${demo} --export ${format} --output ${demo}.${format}`;
+  if (format === "terminal") return `chartmux demo ${demo} --watch`;
+  return `chartmux demo ${demo} --theme dark --export ${format} --output ${demo}.${format}`;
 }
 
-function CopyButton({ value }: { value: string }) {
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 1600);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-
-  async function copy() {
-    await navigator.clipboard.writeText(value);
-    setCopied(true);
-  }
-
+function BrandMark({ compact = false }: { compact?: boolean }) {
   return (
-    <button className="copy-button" onClick={copy} type="button">
-      <span aria-hidden="true">{copied ? "✓" : "⧉"}</span>
-      <span>{copied ? "copied" : "copy"}</span>
-    </button>
-  );
-}
-
-function PixelLogo() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="pixel-logo"
-      shapeRendering="crispEdges"
-      viewBox="0 0 120 72"
-    >
-      <rect fill="currentColor" height="20" opacity="0.32" width="12" x="8" y="44" />
-      <rect fill="currentColor" height="30" opacity="0.48" width="12" x="28" y="34" />
-      <rect fill="currentColor" height="25" opacity="0.62" width="12" x="48" y="39" />
-      <rect fill="currentColor" height="42" opacity="0.78" width="12" x="68" y="22" />
-      <rect fill="currentColor" height="50" width="12" x="88" y="14" />
-      <path d="M8 37h20v-9h20v5h20V17h20V8h24" fill="none" stroke="var(--chart-cyan)" strokeWidth="4" />
-      <rect fill="var(--foreground)" height="4" width="8" x="104" y="60" />
+    <svg aria-hidden="true" className={compact ? "brand-mark compact" : "brand-mark"} viewBox="0 0 28 28">
+      <rect fill="currentColor" height="5" opacity="0.38" rx="1.5" width="4" x="4" y="17" />
+      <rect fill="currentColor" height="9" opacity="0.58" rx="1.5" width="4" x="10" y="13" />
+      <rect fill="currentColor" height="14" opacity="0.82" rx="1.5" width="4" x="16" y="8" />
+      <path d="m4 14 6-4 6 1 8-7" fill="none" stroke="white" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      <circle cx="24" cy="4" fill="white" r="2" />
     </svg>
   );
 }
 
-function columnsForViewport() {
-  if (window.innerWidth <= 620) return 1;
-  if (window.innerWidth <= 960) return 2;
-  return 3;
+function CopyButton({
+  className = "",
+  label,
+  size = "medium",
+  value,
+  variant = "outline",
+}: {
+  className?: string;
+  label: string;
+  size?: "small" | "medium" | "large";
+  value: string;
+  variant?: "primary" | "outline" | "ghost";
+}) {
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+
+  useEffect(() => {
+    if (status === "idle") return;
+    const timer = window.setTimeout(() => setStatus("idle"), 1800);
+    return () => window.clearTimeout(timer);
+  }, [status]);
+
+  function copy() {
+    void navigator.clipboard.writeText(value).then(
+      () => setStatus("copied"),
+      () => setStatus("failed"),
+    );
+  }
+
+  let message = label;
+  if (status === "copied") message = "Copied";
+  if (status === "failed") message = "Copy failed";
+
+  return (
+    <button
+      aria-live="polite"
+      className={`button ${variant} ${size} ${className}`.trim()}
+      onClick={copy}
+      type="button"
+    >
+      {status === "copied" ? <CheckIcon aria-hidden="true" /> : <CopyIcon aria-hidden="true" />}
+      {message}
+    </button>
+  );
+}
+
+type AnsiSegment = {
+  bold: boolean;
+  color?: string;
+  dim: boolean;
+  text: string;
+};
+
+function parseAnsi(input: string): AnsiSegment[] {
+  const segments: AnsiSegment[] = [];
+  const expression = /\x1b\[([0-9;]*)m/g;
+  let bold = false;
+  let color: string | undefined;
+  let dim = false;
+  let cursor = 0;
+
+  function append(text: string) {
+    if (!text) return;
+    const previous = segments.at(-1);
+    if (previous && previous.bold === bold && previous.color === color && previous.dim === dim) {
+      previous.text += text;
+      return;
+    }
+    segments.push({ bold, color, dim, text });
+  }
+
+  for (const match of input.matchAll(expression)) {
+    append(input.slice(cursor, match.index));
+    const codes = match[1] === "" ? [0] : match[1].split(";").map(Number);
+    for (let index = 0; index < codes.length; index += 1) {
+      const code = codes[index];
+      if (code === 0) {
+        bold = false;
+        color = undefined;
+        dim = false;
+      } else if (code === 1) {
+        bold = true;
+      } else if (code === 2) {
+        dim = true;
+      } else if (code === 22) {
+        bold = false;
+        dim = false;
+      } else if (code === 39) {
+        color = undefined;
+      } else if (code === 38 && codes[index + 1] === 2) {
+        color = `rgb(${codes[index + 2]} ${codes[index + 3]} ${codes[index + 4]})`;
+        index += 4;
+      }
+    }
+    cursor = (match.index ?? 0) + match[0].length;
+  }
+  append(input.slice(cursor));
+  return segments;
+}
+
+function TerminalChart({ demo }: { demo: DemoId }) {
+  const [content, setContent] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(demoAsset(demo), { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`Unable to load terminal demo ${demo}`);
+        return response.text();
+      })
+      .then(setContent)
+      .catch((error: unknown) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setContent("Terminal preview unavailable");
+      });
+    return () => controller.abort();
+  }, [demo]);
+
+  const segments = useMemo(() => parseAnsi(content ?? "Rendering terminal output…"), [content]);
+  return (
+    <div className="terminal-viewport">
+      <pre className="terminal-output" aria-label={`Actual chartmux terminal output: ${demo}`} role="img">
+        {segments.map((segment, index) => (
+          <span
+            key={`${index}-${segment.text.length}`}
+            style={{
+              color: segment.color,
+              fontWeight: segment.bold ? 700 : undefined,
+              opacity: segment.dim ? 0.48 : undefined,
+            }}
+          >
+            {segment.text}
+          </span>
+        ))}
+      </pre>
+    </div>
+  );
+}
+
+function SiteChrome() {
+  const navItems = [
+    { href: "#overview", label: "Overview" },
+    { href: "#demo", label: "Demo" },
+    { href: "#examples", label: "Examples" },
+    { href: "#install", label: "Install" },
+  ];
+
+  return (
+    <>
+      <header className="site-header">
+        <div className="site-header-row shell">
+          <a className="header-brand" href="#overview">
+            <BrandMark compact />
+            <span className="hand-underline">chartmux</span>
+          </a>
+          <div className="header-actions">
+            <a href={repositoryUrl} rel="noreferrer noopener" target="_blank">GitHub</a>
+            <CopyButton className="site-header-install" label="Install" size="small" value={installCommand} variant="primary" />
+          </div>
+        </div>
+        <nav className="mobile-nav shell" aria-label="On this page">
+          {navItems.map((item) => <a href={item.href} key={item.href}>{item.label}</a>)}
+        </nav>
+      </header>
+
+      <aside className="site-sidebar" aria-label="Primary navigation">
+        <a className="sidebar-brand" href="#overview">
+          <BrandMark />
+          <span className="hand-underline">chartmux</span>
+        </a>
+        <nav className="sidebar-nav" aria-label="On this page">
+          {navItems.map((item) => <a href={item.href} key={item.href}>{item.label}</a>)}
+        </nav>
+        <div className="sidebar-footer">
+          <span className="sidebar-version">v0.1.0</span>
+          <a href={repositoryUrl} rel="noreferrer noopener" target="_blank">
+            <GithubIcon aria-hidden="true" /> GitHub <ExternalLinkIcon aria-hidden="true" className="sidebar-external" />
+          </a>
+          <a href={`${repositoryUrl}/releases`} rel="noreferrer noopener" target="_blank">
+            Releases <ExternalLinkIcon aria-hidden="true" className="sidebar-external" />
+          </a>
+          <CopyButton className="sidebar-install" label="Install" size="small" value={installCommand} variant="primary" />
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function TerminalStage({ demo }: { demo: DemoId }) {
+  return (
+    <div className="terminal-stage">
+      <div className="terminal-window-bar" aria-hidden="true">
+        <span className="traffic-lights"><i /><i /><i /></span>
+        <span>chartmux demo {demo}</span>
+      </div>
+      <div className="terminal-scene">
+        <TerminalChart demo={demo} />
+      </div>
+    </div>
+  );
+}
+
+function DemoFrame({
+  demo,
+  format,
+  onExpand,
+  onFormatChange,
+  onNext,
+  onPrevious,
+}: {
+  demo: DemoId;
+  format: ExportFormat;
+  onExpand: () => void;
+  onFormatChange: (format: ExportFormat) => void;
+  onNext: () => void;
+  onPrevious: () => void;
+}) {
+  const item = demos.find((candidate) => candidate.id === demo) ?? demos[0];
+  const command = chartCommand(demo, format);
+
+  return (
+    <figure className="demo-figure">
+      <div className="demo-frame">
+        <div className="demo-viewport"><TerminalStage demo={demo} /></div>
+        <div className="demo-bar">
+          <div className="demo-controls">
+            <button aria-label="Previous chart" className="demo-icon-button" onClick={onPrevious} type="button">
+              <ChevronLeftIcon aria-hidden="true" />
+            </button>
+            <span className="demo-current">{item.label}</span>
+            <button aria-label="Next chart" className="demo-icon-button" onClick={onNext} type="button">
+              <ChevronRightIcon aria-hidden="true" />
+            </button>
+            <div aria-label="Export format" className="demo-segmented" role="group">
+              {(["terminal", "png", "svg", "html"] as const).map((value) => (
+                <button
+                  aria-pressed={format === value}
+                  className="demo-segment"
+                  key={value}
+                  onClick={() => onFormatChange(value)}
+                  type="button"
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="demo-actions">
+            <CopyButton label="Copy command" size="small" value={command} variant="ghost" />
+            <button className="demo-expand" onClick={onExpand} type="button">
+              <Maximize2Icon aria-hidden="true" /> Expand
+            </button>
+          </div>
+        </div>
+      </div>
+      <figcaption className="demo-caption">{command}</figcaption>
+    </figure>
+  );
+}
+
+function ChartDialog({ demo, onClose }: { demo: DemoId; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const item = demos.find((candidate) => candidate.id === demo) ?? demos[0];
+
+  useEffect(() => {
+    dialogRef.current?.showModal();
+    return () => dialogRef.current?.close();
+  }, []);
+
+  return (
+    <dialog
+      aria-labelledby="dialog-title"
+      className="chart-dialog"
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      ref={dialogRef}
+    >
+      <div className="dialog-card">
+        <div className="dialog-header">
+          <div>
+            <h2 id="dialog-title">{item.label}</h2>
+            <p>Actual 80-column terminal output from the package.</p>
+          </div>
+          <button aria-label="Close preview" className="dialog-close" onClick={onClose} type="button"><XIcon aria-hidden="true" /></button>
+        </div>
+        <TerminalStage demo={demo} />
+      </div>
+    </dialog>
+  );
 }
 
 function App() {
-  const [selected, setSelected] = useState<DemoId | null>(null);
+  const [selected, setSelected] = useState<DemoId>("line");
   const [format, setFormat] = useState<ExportFormat>("terminal");
-  const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const demo = useMemo(
-    () => demos.find((item) => item.id === selected) ?? null,
-    [selected],
-  );
-  const command = demo ? chartCommand(demo.id, format) : "chartmux demo --all";
+  const [expanded, setExpanded] = useState(false);
+  const selectedIndex = demos.findIndex((item) => item.id === selected);
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
-
-      if (event.key === "Escape" && selected) {
-        setSelected(null);
-        setFormat("terminal");
-        return;
-      }
-
-      if (!selected && /^[1-9]$/.test(event.key)) {
-        const nextDemo = demos[Number(event.key) - 1];
-        if (nextDemo) setSelected(nextDemo.id);
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selected]);
-
-  function moveGridFocus(event: React.KeyboardEvent, index: number) {
-    const columns = columnsForViewport();
-    let nextIndex = index;
-
-    switch (event.key) {
-      case "ArrowRight":
-        nextIndex = Math.min(index + 1, demos.length - 1);
-        break;
-      case "ArrowLeft":
-        nextIndex = Math.max(index - 1, 0);
-        break;
-      case "ArrowDown":
-        nextIndex = Math.min(index + columns, demos.length - 1);
-        break;
-      case "ArrowUp":
-        nextIndex = Math.max(index - columns, 0);
-        break;
-      case "Home":
-        nextIndex = 0;
-        break;
-      case "End":
-        nextIndex = demos.length - 1;
-        break;
-      default:
-        return;
-    }
-
-    event.preventDefault();
-    tileRefs.current[nextIndex]?.focus();
-  }
-
-  function openDemo(id: DemoId) {
+  function selectDemo(id: DemoId) {
     setSelected(id);
-    setFormat("terminal");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.requestAnimationFrame(() => document.querySelector("#demo")?.scrollIntoView({ behavior: "smooth" }));
   }
 
-  function closeDemo() {
-    const previousIndex = demos.findIndex((item) => item.id === selected);
-    setSelected(null);
-    setFormat("terminal");
-    window.requestAnimationFrame(() => tileRefs.current[previousIndex]?.focus());
+  function moveDemo(offset: number) {
+    const nextIndex = (selectedIndex + offset + demos.length) % demos.length;
+    setSelected(demos[nextIndex].id);
   }
 
   return (
-    <main className="terminal-app">
-      <header className="terminal-topbar">
-        <a className="app-name" href="#top" aria-label="Chartmux home">
-          <span className="prompt-mark" aria-hidden="true">›_</span>
-          <span>chartmux</span>
-          <span className="version">0.1.0</span>
-        </a>
-        <span className="view-name">{demo ? `gallery / ${demo.id}` : "gallery"}</span>
-        <span className="chart-count">{demos.length} charts</span>
-      </header>
+    <div className="page">
+      <a className="skip-link" href="#demo">Skip to the demo</a>
+      <SiteChrome />
 
-      {demo ? (
-        <section className="workspace" aria-labelledby="workspace-title">
-          <div className="workspace-heading">
-            <button className="back-button" onClick={closeDemo} type="button">
-              <span aria-hidden="true">←</span> gallery
-            </button>
-            <div className="workspace-title-group">
-              <span className="chart-index">{String(demos.indexOf(demo) + 1).padStart(2, "0")}</span>
-              <div>
-                <h1 id="workspace-title">{demo.label}</h1>
-                <p>{demo.description}</p>
-              </div>
-            </div>
-            <span className="live-status"><i aria-hidden="true" /> smooth SVG</span>
-          </div>
-
-          <div className="workspace-chart" role="img" aria-label={`${demo.label} demonstration chart`}>
-            <ChartPreview demo={demo.id} />
-          </div>
-
-          <div className="workspace-meta">
-            <span>{demo.dataSummary}</span>
-            <span>responsive</span>
-            <span>dark theme</span>
-          </div>
-
-          <div className="command-console">
-            <div className="format-picker" aria-label="Output format">
-              {(["terminal", "png", "svg", "html"] as const).map((item) => (
-                <button
-                  aria-pressed={format === item}
-                  className={format === item ? "active" : ""}
-                  key={item}
-                  onClick={() => setFormat(item)}
-                  type="button"
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-            <div className="command-line">
-              <span className="prompt-symbol" aria-hidden="true">$</span>
-              <code>{command}</code>
-              <CopyButton value={command} />
-            </div>
-          </div>
-        </section>
-      ) : (
-        <>
-          <section className="intro" id="top" aria-labelledby="page-title">
-            <PixelLogo />
-            <div>
-              <h1 id="page-title">CHARTMUX</h1>
-              <p>Beautiful, deterministic charts from your terminal.</p>
-            </div>
-            <div className="boot-status" aria-label="Application ready">
-              <span><i aria-hidden="true" /> graphics ready</span>
-              <span>choose a chart to begin</span>
+      <div className="site-content">
+        <main>
+          <section className="overview-section shell" id="overview">
+            <p className="eyebrow">Terminal · PNG · SVG · HTML</p>
+            <h1 className="hero-title"><span className="marker">Terminal-native charts</span> for every surface.</h1>
+            <p className="lede">Chartmux turns CSV, JSON, or a versioned chart spec into polished output with one deterministic renderer. The demo below is captured from the CLI itself.</p>
+            <div className="hero-actions">
+              <CopyButton className="mobile-primary-action" label="Copy install command" size="large" value={installCommand} variant="primary" />
+              <a className="button outline large mobile-primary-action" href={repositoryUrl} rel="noreferrer noopener" target="_blank">
+                <GithubIcon aria-hidden="true" /> View on GitHub
+              </a>
+              <span className="release-meta"><span>v0.1.0</span> macOS · Linux · Windows</span>
             </div>
           </section>
 
-          <section aria-labelledby="gallery-title">
-            <div className="section-bar">
-              <div>
-                <span className="section-path">~/charts</span>
-                <h2 id="gallery-title">Choose a chart</h2>
-              </div>
-              <div className="gallery-command">
-                <span className="prompt-symbol" aria-hidden="true">$</span>
-                <code>{command}</code>
-                <CopyButton value={command} />
-              </div>
-            </div>
+          <section className="demo-section shell" id="demo">
+            <DemoFrame
+              demo={selected}
+              format={format}
+              onExpand={() => setExpanded(true)}
+              onFormatChange={setFormat}
+              onNext={() => moveDemo(1)}
+              onPrevious={() => moveDemo(-1)}
+            />
+          </section>
 
-            <div className="chart-grid">
+          <section className="content-section shell" id="examples">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Examples</p>
+                <h2>Explore the built-in charts</h2>
+                <p>Choose any renderer-owned demo and it opens in the player above.</p>
+              </div>
+              <span className="section-count">{demos.length} demos</span>
+            </div>
+            <div className="demo-list">
               {demos.map((item, index) => (
                 <button
-                  aria-label={`Open ${item.label} demo`}
-                  className="chart-tile"
+                  aria-pressed={selected === item.id}
+                  className="demo-list-item"
                   key={item.id}
-                  onClick={() => openDemo(item.id)}
-                  onKeyDown={(event) => moveGridFocus(event, index)}
-                  ref={(node) => {
-                    tileRefs.current[index] = node;
-                  }}
+                  onClick={() => selectDemo(item.id)}
                   type="button"
                 >
-                  <span className="tile-heading">
-                    <span className="tile-index">{String(index + 1).padStart(2, "0")}</span>
-                    <span className="tile-title">{item.label}</span>
-                    <span className="tile-open" aria-hidden="true">↗</span>
-                  </span>
-                  <span className="tile-chart" aria-hidden="true">
-                    <ChartPreview compact demo={item.id} />
-                  </span>
-                  <span className="tile-footer">
-                    <span>{item.description}</span>
-                    <span>{item.dataSummary}</span>
-                  </span>
+                  <span className="demo-list-index">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="demo-list-copy"><strong>{item.label}</strong><small>{item.description}</small></span>
+                  <ChevronRightIcon aria-hidden="true" />
                 </button>
               ))}
             </div>
           </section>
-        </>
-      )}
 
-      <footer className="terminal-statusbar">
-        <span><i aria-hidden="true" /> ready</span>
-        <span className="shortcut"><kbd>↑↓←→</kbd> navigate</span>
-        <span className="shortcut"><kbd>enter</kbd> open</span>
-        {demo ? <span className="shortcut"><kbd>esc</kbd> gallery</span> : <span className="shortcut"><kbd>1–9</kbd> quick open</span>}
-        <a href="https://github.com/mertdeveci5/chartmux">source ↗</a>
-      </footer>
-    </main>
+          <section className="content-section install-section shell" id="install">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Install</p>
+                <h2>Get chartmux running</h2>
+                <p>Pick the package manager already used in your workflow.</p>
+              </div>
+              <PackageIcon aria-hidden="true" className="section-icon" />
+            </div>
+            <ol className="install-timeline">
+              {installOptions.map((option, index) => (
+                <li key={option.label}>
+                  <span className="timeline-indicator">{index + 1}</span>
+                  <span className="timeline-copy"><strong>{option.label}</strong><small>{option.description}</small></span>
+                  <CopyButton label="Copy" size="small" value={option.value} variant="outline" />
+                </li>
+              ))}
+            </ol>
+            <p className="install-note">Prebuilt binaries are also available from <a className="text-link" href={`${repositoryUrl}/releases`} rel="noreferrer noopener" target="_blank">GitHub Releases</a>.</p>
+          </section>
+        </main>
+
+        <footer className="site-footer">
+          <div className="site-footer-content shell">
+            <span>chartmux v0.1.0</span>
+            <span><a href={repositoryUrl} rel="noreferrer noopener" target="_blank">GitHub</a><a href={`${repositoryUrl}/releases`} rel="noreferrer noopener" target="_blank">Releases</a></span>
+          </div>
+        </footer>
+      </div>
+
+      {expanded ? <ChartDialog demo={selected} onClose={() => setExpanded(false)} /> : null}
+    </div>
   );
 }
 
